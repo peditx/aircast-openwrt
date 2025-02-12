@@ -68,6 +68,9 @@ USE_PROCD=1
 start_service() {
     procd_set_param command /usr/bin/aircast \
         -c /etc/config.xml \
+        -b 10.1.1.1 \
+        --allowed-interfaces=br-lan \
+        --no-ipv6 \
         --foreground \
         --no-mdns \
         --log-timestamps
