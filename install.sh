@@ -16,7 +16,7 @@ esac
 # ------ Part 2: Install Dependencies ------
 echo "Installing dependencies..."
 opkg update
-opkg install curl libopenssl ca-bundle nmap || {
+opkg install curl libopenssl ca-bundle nmap avahi-utils || {
     echo "Error installing packages!"
     exit 1
 }
