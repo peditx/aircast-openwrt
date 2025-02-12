@@ -35,19 +35,23 @@ else
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH"
 fi
 
+# Stop any running aircast processes before installing new one
+echo "Stopping any running AirCast processes..."
+killall aircast
+
+# Wait for process termination
+sleep 2
+
+# Remove old binary if it exists
+if [ -f /usr/bin/aircast ]; then
+    echo "Removing old aircast binary..."
+    rm /usr/bin/aircast
+fi
+
 # Download the correct binary
+echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
-
-# Create the default config file (config.xml)
-cat <<EOF > /etc/aircast.xml
-<?xml version="1.0" encoding="UTF-8"?>
-<config>
-    <interface>br-lan</interface>
-    <device_name>AirCastDevice</device_name>
-    <ip>10.1.1.1</ip>
-</config>
-EOF
 
 # Create service startup script
 cat << 'EOF' > /etc/init.d/aircast
@@ -58,7 +62,7 @@ USE_PROCD=1
 
 start_service() {
     procd_open_instance
-    procd_set_param command /usr/bin/aircast --config /etc/aircast.xml
+    procd_set_param command /usr/bin/aircast
     procd_set_param respawn
     procd_close_instance
 }
@@ -72,3 +76,6 @@ chmod +x /etc/init.d/aircast
 # Display service status
 echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
 ps | grep aircast
+
+# Print out bridge interface DHCP info
+echo "\nThe bridge interface (br-lan) is configured to handle DHCP."
