@@ -42,7 +42,7 @@ else
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH"
 fi
 
-# 4. Stop any running AirCast processes and remove old binary
+# 4. Stop any running AirCast processes and remove the old binary
 echo "Stopping any running AirCast processes..."
 killall aircast
 sleep 2
@@ -57,7 +57,7 @@ echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# 6. Create the configuration file as config.xml in /etc
+# 6. Create the XML configuration file as config.xml in /etc
 cat <<EOF > /etc/config.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <config>
@@ -67,7 +67,10 @@ cat <<EOF > /etc/config.xml
 </config>
 EOF
 
-# 7. Create the init.d service script that changes directory to /etc
+# Rename the file to "config.xml" so that AirCast finds it by default.
+mv /etc/config.xml /etc/config.xml
+
+# 7. Create the init.d service script for AirCast that forces a working directory of /etc
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
@@ -75,8 +78,9 @@ STOP=10
 USE_PROCD=1
 
 start_service() {
-    # Change to /etc so that config.xml is in the working directory
-    cd /etc && /usr/bin/aircast
+    # Change directory to /etc so that "config.xml" is in the working directory,
+    # then run AirCast with the -i option so it loads /etc/config.xml.
+    cd /etc && /usr/bin/aircast -i config.xml
 }
 EOF
 chmod +x /etc/init.d/aircast
@@ -85,7 +89,7 @@ chmod +x /etc/init.d/aircast
 /etc/init.d/aircast enable
 /etc/init.d/aircast start
 
-# 9. Display service status
+# 9. Display the service status
 echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
 ps | grep aircast
 
