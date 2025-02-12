@@ -46,6 +46,9 @@ device_name=AirCastDevice
 ip=$(ip addr show br-lan | grep inet | awk '{print $2}' | cut -d/ -f1)
 EOF
 
+# Make sure aircast reads the correct configuration file
+sed -i 's|/usr/bin/aircast|/usr/bin/aircast --config /etc/aircast.conf|' /etc/init.d/aircast
+
 # Create service startup script
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
@@ -73,4 +76,3 @@ ps | grep aircast
 
 # Additional step for DHCP (bridge interface should already handle this)
 echo "\nThe bridge interface (br-lan) is configured to handle DHCP."
-
