@@ -44,7 +44,7 @@ fi
 
 # 4. Stop any running AirCast processes and remove the old binary
 echo "Stopping any running AirCast processes..."
-killall aircast
+killall aircast 2>/dev/null
 sleep 2
 
 if [ -f /usr/bin/aircast ]; then
@@ -57,23 +57,25 @@ echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# 6. Generate a reference config file in /etc if it doesn't exist,
-# then modify it to set the desired interface and IP.
-echo "Generating reference config file..."
-cd /etc || exit 1
-/usr/bin/aircast -i config.xml
+# 6. Generate config file in /etc with full path
+echo "Generating config file..."
+/usr/bin/aircast -i /etc/config.xml
 
-# At this point, a reference config.xml should be generated.
-# Update the configuration with your desired settings.
-# (Adjust the sed commands as needed based on the actual format of the reference file.)
-sed -i 's/<interface>.*<\/interface>/<interface>br-lan<\/interface>/' config.xml
-sed -i 's/<ip>.*<\/ip>/<ip>10.1.1.1<\/ip>/' config.xml
-# You can also update the device name if present:
-sed -i 's/<device_name>.*<\/device_name>/<device_name>AirCastDevice<\/device_name>/' config.xml
+# Check if config file created
+if [ ! -f /etc/config.xml ]; then
+    echo "Error: Failed to generate config.xml!"
+    exit 1
+fi
 
-# 7. Create the init.d service script for AirCast.
-# This script changes the working directory to /etc (so that config.xml is found)
-# and launches AirCast (which will load config.xml from the current directory).
+# 7. Modify config with correct path
+sed -i 's/<interface>.*<\/interface>/<interface>br-lan<\/interface>/' /etc/config.xml
+sed -i 's/<ip>.*<\/ip>/<ip>10.1.1.1<\/ip>/' /etc/config.xml
+sed -i 's/<device_name>.*<\/device_name>/<device_name>AirCastDevice<\/device_name>/' /etc/config.xml
+
+# Set permissions
+chmod 644 /etc/config.xml
+
+# 8. Create init.d service with procd support
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
@@ -81,17 +83,27 @@ STOP=10
 USE_PROCD=1
 
 start_service() {
-    cd /etc && /usr/bin/aircast
+    procd_set_param command /usr/bin/aircast -c /etc/config.xml
+    procd_set_param respawn
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+}
+
+stop_service() {
+    killall aircast
 }
 EOF
 chmod +x /etc/init.d/aircast
 
-# 8. Enable and start the AirCast service
+# 9. Enable and start service
 /etc/init.d/aircast enable
 /etc/init.d/aircast start
 
-# 9. Display service status
-echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
+# 10. Verify
+echo "\n✅ Installation Complete! Status:"
+sleep 2
+/etc/init.d/aircast status
 ps | grep aircast
 
-echo "\nThe bridge interface (br-lan) is configured to handle DHCP."
+echo "\nConfig path: /etc/config.xml"
+echo "Bridge interface: br-lan | IP: 10.1.1.1"
