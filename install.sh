@@ -42,11 +42,10 @@ else
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH"
 fi
 
-# 4. Stop any running AirCast processes and remove the old binary
-echo "Stopping any running AirCast processes..."
+# 4. Stop any running AirCast processes and remove old binary
+echo "Stopping running AirCast processes..."
 killall aircast
 sleep 2
-
 if [ -f /usr/bin/aircast ]; then
     echo "Removing old AirCast binary..."
     rm /usr/bin/aircast
@@ -57,8 +56,7 @@ echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# 6. Create the init.d service script for AirCast.
-#    The script dynamically finds the IP of br-lan; if not found, it defaults to 10.1.1.1.
+# 6. Create init.d service script for AirCast
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
@@ -66,12 +64,12 @@ STOP=10
 USE_PROCD=1
 
 start_service() {
-    # Dynamically get the IP address from br-lan
+    # Get the IP address from br-lan; default to 10.1.1.1 if not found
     BRIP=$(ip addr show br-lan | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     if [ -z "$BRIP" ]; then
         BRIP="10.1.1.1"
     fi
-    echo "Binding AirCast to IP: $BRIP"
+    echo "Starting AirCast with IP: $BRIP"
     /usr/bin/aircast -b "$BRIP"
 }
 EOF
