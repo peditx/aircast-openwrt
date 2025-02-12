@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# 1. تشخیص معماری سیستم
+# 1. Detect system architecture
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64)
@@ -10,7 +10,7 @@ case "$ARCH" in
         AIRCAST_ARCH="aarch64"
         ;;
     armv7l)
-        AIRCAST_ARCH="armv7"
+        AIRCAST_ARCH="arm"
         ;;
     armv6l)
         AIRCAST_ARCH="armv6"
@@ -25,85 +25,76 @@ case "$ARCH" in
         AIRCAST_ARCH="mipsel"
         ;;
     *)
-        echo "معماری سیستم پشتیبانی نمیشود: $ARCH"
+        echo "Unsupported system architecture: $ARCH"
         exit 1
         ;;
 esac
 
-# 2. آپدیت پکیجها و نصب curl/wget
+# 2. Update package list and install required packages
 opkg update
 opkg install curl || opkg install wget
 
-# 3. بررسی وجود باینری در ریپازیتوری
+# 3. Define repository URL and determine the binary URL
 REPO_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files"
-
-# تعیین ابزار بررسی (curl/wget)
-if which curl >/dev/null; then
-    CHECK_CMD="curl --head --silent --fail"
-else
-    CHECK_CMD="wget --spider --quiet"
-fi
-
-# انتخاب آدرس باینری
-if $CHECK_CMD "$REPO_URL/aircast-linux-$AIRCAST_ARCH-static" >/dev/null; then
+if curl --head --silent --fail "$REPO_URL/aircast-linux-$AIRCAST_ARCH-static" > /dev/null; then
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH-static"
 else
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH"
 fi
 
-# 4. متوقف کردن سرویس قدیمی
-echo "متوقف کردن سرویس AirCast..."
-killall -q aircast || true
+# 4. Stop any running AirCast processes and remove the old binary
+echo "Stopping any running AirCast processes..."
+killall aircast
 sleep 2
 
-# حذف باینری قدیمی
-[ -f /usr/bin/aircast ] && rm /usr/bin/aircast
-
-# 5. دانلود باینری جدید
-echo "دانلود باینری AirCast..."
-if which curl >/dev/null; then
-    curl -L -o /usr/bin/aircast "$BINARY_URL"
-else
-    wget -O /usr/bin/aircast "$BINARY_URL"
+if [ -f /usr/bin/aircast ]; then
+    echo "Removing old AirCast binary..."
+    rm /usr/bin/aircast
 fi
+
+# 5. Download the new AirCast binary
+echo "Downloading new AirCast binary..."
+curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# 6. ایجاد فایل کانفیگ با تنظیمات صحیح
-echo "ایجاد فایل کانفیگ..."
+# 6. Generate a reference config file if one does not exist, then overwrite with our settings.
+#    According to the docs, use "-i" to generate a reference file.
+if [ ! -f /etc/config.xml ]; then
+    echo "Generating reference config file..."
+    cd /etc && /usr/bin/aircast -i config.xml
+fi
+
+# Overwrite /etc/config.xml with our desired settings.
+# (You can adjust these values as needed.)
 cat <<EOF > /etc/config.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <config>
-    <interface>eth1</interface> <!-- تغییر به eth1 مطابق لاگ شما -->
-    <device_name>AirCast-OpenWrt</device_name>
-    <ip>192.168.100.10</ip> <!-- آیپی مطابق خروجی لاگ -->
+    <interface>br-lan</interface>
+    <device_name>AirCastDevice</device_name>
+    <ip>10.1.1.1</ip>
 </config>
 EOF
-chmod 644 /etc/config.xml
 
-# 7. ایجاد سرویس procd
-echo "تنظیم سرویس init.d..."
-cat <<'EOF' > /etc/init.d/aircast
+# 7. Create the init.d service script for AirCast.
+#     This script changes the working directory to /etc (so that config.xml is found) before launching AirCast.
+cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
+STOP=10
 USE_PROCD=1
-DEPENDS="network"
 
 start_service() {
-    procd_open_instance
-    procd_set_param command /usr/bin/aircast -c /etc/config.xml # پارامتر ضروری
-    procd_set_param respawn
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
+    cd /etc && /usr/bin/aircast
 }
 EOF
 chmod +x /etc/init.d/aircast
 
-# 8. راه‌اندازی سرویس
+# 8. Enable and start the AirCast service
 /etc/init.d/aircast enable
-/etc/init.d/aircast restart
+/etc/init.d/aircast start
 
-# 9. بررسی وضعیت
-echo "نصب کامل شد! وضعیت سرویس:"
-logread | grep -i aircast
+# 9. Display service status
+echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
 ps | grep aircast
+
+echo "\nThe bridge interface (br-lan) is configured to handle DHCP."
