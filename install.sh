@@ -57,9 +57,9 @@ echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# 6. Generate config file in /etc with full path
+# 6. Generate config file in /etc with suppressed output
 echo "Generating config file..."
-/usr/bin/aircast -i /etc/config.xml
+/usr/bin/aircast -i /etc/config.xml >/dev/null 2>&1
 
 # Check if config file created
 if [ ! -f /etc/config.xml ]; then
@@ -103,7 +103,7 @@ chmod +x /etc/init.d/aircast
 echo "\n✅ Installation Complete! Status:"
 sleep 2
 /etc/init.d/aircast status
-ps | grep aircast
+ps | grep -v grep | grep aircast
 
 echo "\nConfig path: /etc/config.xml"
 echo "Bridge interface: br-lan | IP: 10.1.1.1"
