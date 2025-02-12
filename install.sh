@@ -24,7 +24,6 @@ fi
 # Install required packages
 opkg update
 opkg install curl || opkg install wget
-opkg install whiptail
 
 # Define custom repository URL
 REPO_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files"
@@ -40,27 +39,24 @@ fi
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# Whiptail to get device name
-DEVICE_NAME=$(whiptail --inputbox "Enter the name of the device:" 8 39 "AirCastDevice" 3>&1 1>&2 2>&3)
+# Create AirCast config file
+cat << EOF > /etc/aircast.conf
+interface=br-lan
+device_name=AirCastDevice
+ip=$(ip addr show br-lan | grep inet | awk '{print $2}' | cut -d/ -f1)
+EOF
 
-# Automatically get the IP address of the device (from DHCP)
-IP_ADDRESS=$(ip addr show br-lan | grep "inet " | awk '{print $2}' | cut -d/ -f1)
-
-# If IP is not found, fallback to a default IP
-if [ -z "$IP_ADDRESS" ]; then
-    IP_ADDRESS="192.168.1.1"
-fi
-
-# Create service startup script with interface br-lan
-cat << EOF > /etc/init.d/aircast
+# Create service startup script
+cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
 STOP=10
 USE_PROCD=1
 
 start_service() {
+    # Ensure AirCast uses the correct network interface and config file
     procd_open_instance
-    procd_set_param command /usr/bin/aircast -i br-lan --device-name "$DEVICE_NAME" --ip "$IP_ADDRESS"
+    procd_set_param command /usr/bin/aircast --config /etc/aircast.conf
     procd_set_param respawn
     procd_close_instance
 }
@@ -71,60 +67,10 @@ chmod +x /etc/init.d/aircast
 /etc/init.d/aircast enable
 /etc/init.d/aircast start
 
-# Create control script to manage AirCast
-cat << 'EOF' > /usr/bin/aircast-control
-#!/bin/sh
+# Display service status
+echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
+ps | grep aircast
 
-# Menu for managing AirCast devices
-CHOICE=$(whiptail --title "AirCast Control" --menu "Choose an option" 15 50 4 \
-"1" "Show AirCast status" \
-"2" "Change device name" \
-"3" "Restart AirCast" \
-"4" "Exit" 3>&1 1>&2 2>&3)
+# Additional step for DHCP (bridge interface should already handle this)
+echo "\nThe bridge interface (br-lan) is configured to handle DHCP."
 
-case "$CHOICE" in
-    1)
-        # Show AirCast status
-        AIRCAST_STATUS=$(ps | grep aircast)
-        if [ -z "$AIRCAST_STATUS" ]; then
-            whiptail --msgbox "AirCast is not running." 8 45
-        else
-            whiptail --msgbox "$AIRCAST_STATUS" 20 60
-        fi
-        ;;
-    2)
-        # Change device name
-        DEVICE_NAME=$(whiptail --inputbox "Enter the new name of the device:" 8 39 "AirCastDevice" 3>&1 1>&2 2>&3)
-
-        # Check if the device name is not empty
-        if [ -z "$DEVICE_NAME" ]; then
-            whiptail --msgbox "Device name cannot be empty." 8 45
-        else
-            # Update the startup script with the new name
-            sed -i "s/--device-name.*/--device-name \"$DEVICE_NAME\"/" /etc/init.d/aircast
-
-            # Restart the service
-            /etc/init.d/aircast restart
-            whiptail --msgbox "Device name changed and AirCast restarted." 8 45
-        fi
-        ;;
-    3)
-        # Restart AirCast
-        /etc/init.d/aircast restart
-        whiptail --msgbox "AirCast restarted." 8 45
-        ;;
-    4)
-        # Exit the menu
-        exit 0
-        ;;
-    *)
-        # Invalid option
-        whiptail --msgbox "Invalid option. Exiting." 8 45
-        ;;
-esac
-EOF
-
-chmod +x /usr/bin/aircast-control
-
-# Display completion message
-echo "\n✅ AirCast installation and setup completed! You can control AirCast using the 'aircast-control' command."
