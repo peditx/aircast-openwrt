@@ -69,11 +69,7 @@ start_service() {
     procd_set_param command /usr/bin/aircast \
         -c /etc/config.xml \
         -b 10.1.1.1 \
-        --allowed-interfaces=br-lan \
-        --no-ipv6 \
-        --foreground \
-        --no-mdns \
-        --log-timestamps
+
     procd_set_param respawn 300 5 0
     procd_set_param stdout 1
     procd_set_param stderr 1
