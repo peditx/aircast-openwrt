@@ -43,7 +43,7 @@ chmod +x /usr/bin/aircast
 # Whiptail to get device name
 DEVICE_NAME=$(whiptail --inputbox "Enter the name of the device:" 8 39 "AirCastDevice" 3>&1 1>&2 2>&3)
 
-# Automatically get the IP address of the device (from br-lan interface)
+# Automatically get the IP address of the device (from DHCP)
 IP_ADDRESS=$(ip addr show br-lan | grep "inet " | awk '{print $2}' | cut -d/ -f1)
 
 # If IP is not found, fallback to a default IP
