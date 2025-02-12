@@ -57,7 +57,15 @@ echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# 6. Create the configuration file as config.xml in /etc
+# 6. Generate a reference config file if one does not exist, then overwrite with our settings.
+#    According to the docs, use "-i" to generate a reference file.
+if [ ! -f /etc/config.xml ]; then
+    echo "Generating reference config file..."
+    cd /etc && /usr/bin/aircast -i config.xml
+fi
+
+# Overwrite /etc/config.xml with our desired settings.
+# (You can adjust these values as needed.)
 cat <<EOF > /etc/config.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <config>
@@ -67,8 +75,8 @@ cat <<EOF > /etc/config.xml
 </config>
 EOF
 
-# 7. Create the init.d service script for AirCast
-#     This script changes directory to /etc so that AirCast finds config.xml in its working directory.
+# 7. Create the init.d service script for AirCast.
+#     This script changes the working directory to /etc (so that config.xml is found) before launching AirCast.
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
