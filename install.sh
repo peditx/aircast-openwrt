@@ -2,58 +2,75 @@
 
 # Detect system architecture
 ARCH=$(uname -m)
-if [ "$ARCH" = "x86_64" ]; then
-    AIRCAST_ARCH="x86_64"
-elif [ "$ARCH" = "aarch64" ]; then
-    AIRCAST_ARCH="aarch64"
-elif [ "$ARCH" = "armv7l" ]; then
-    AIRCAST_ARCH="arm"
-elif [ "$ARCH" = "armv6l" ]; then
-    AIRCAST_ARCH="armv6"
-elif [ "$ARCH" = "armv5l" ]; then
-    AIRCAST_ARCH="armv5"
-elif [ "$ARCH" = "mips" ]; then
-    AIRCAST_ARCH="mips"
-elif [ "$ARCH" = "mipsel" ]; then
-    AIRCAST_ARCH="mipsel"
-else
-    echo "Unsupported system architecture: $ARCH"
-    exit 1
-fi
+case "$ARCH" in
+    x86_64)
+        AIRCAST_ARCH="x86_64"
+        ;;
+    aarch64)
+        AIRCAST_ARCH="aarch64"
+        ;;
+    armv7l)
+        AIRCAST_ARCH="arm"
+        ;;
+    armv6l)
+        AIRCAST_ARCH="armv6"
+        ;;
+    armv5l)
+        AIRCAST_ARCH="armv5"
+        ;;
+    mips)
+        AIRCAST_ARCH="mips"
+        ;;
+    mipsel)
+        AIRCAST_ARCH="mipsel"
+        ;;
+    *)
+        echo "Unsupported system architecture: $ARCH"
+        exit 1
+        ;;
+esac
 
-# Install required packages
+# Update package list and install curl (or wget if curl is not available)
 opkg update
 opkg install curl || opkg install wget
 
-# Define custom repository URL
+# Define repository URL
 REPO_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files"
 
-# Try downloading static version first, fallback to normal if not available
+# Try to download the static version first; if unavailable, use the normal version
 if curl --head --silent --fail "$REPO_URL/aircast-linux-$AIRCAST_ARCH-static" > /dev/null; then
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH-static"
 else
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH"
 fi
 
-# Stop any running aircast processes before installing new one
-echo "Stopping any running AirCast processes..."
+# Stop any running AirCast processes
+echo "Stopping AirCast processes..."
 killall aircast
-
-# Wait for process termination
 sleep 2
 
-# Remove old binary if it exists
+# Remove the old binary if it exists
 if [ -f /usr/bin/aircast ]; then
-    echo "Removing old aircast binary..."
+    echo "Removing old AirCast binary..."
     rm /usr/bin/aircast
 fi
 
-# Download the correct binary
+# Download the new AirCast binary
 echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# Create service startup script
+# Create the default config file (config.xml) in /etc
+cat <<EOF > /etc/config.xml
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+    <interface>br-lan</interface>
+    <device_name>AirCastDevice</device_name>
+    <ip>10.1.1.1</ip>
+</config>
+EOF
+
+# Create the init.d script for AirCast service
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
@@ -61,21 +78,18 @@ STOP=10
 USE_PROCD=1
 
 start_service() {
-    procd_open_instance
-    procd_set_param command /usr/bin/aircast
-    procd_set_param respawn
-    procd_close_instance
+    # Change directory to /etc so that config.xml is in the working directory
+    cd /etc && /usr/bin/aircast
 }
 EOF
 chmod +x /etc/init.d/aircast
 
-# Enable and start service
+# Enable and start the AirCast service
 /etc/init.d/aircast enable
 /etc/init.d/aircast start
 
-# Display service status
+# Display the status
 echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
 ps | grep aircast
 
-# Print out bridge interface DHCP info
 echo "\nThe bridge interface (br-lan) is configured to handle DHCP."
