@@ -86,18 +86,27 @@ case "$CHOICE" in
     1)
         # Show AirCast status
         AIRCAST_STATUS=$(ps | grep aircast)
-        whiptail --msgbox "$AIRCAST_STATUS" 20 60
+        if [ -z "$AIRCAST_STATUS" ]; then
+            whiptail --msgbox "AirCast is not running." 8 45
+        else
+            whiptail --msgbox "$AIRCAST_STATUS" 20 60
+        fi
         ;;
     2)
         # Change device name
         DEVICE_NAME=$(whiptail --inputbox "Enter the new name of the device:" 8 39 "AirCastDevice" 3>&1 1>&2 2>&3)
 
-        # Update the startup script with new name
-        sed -i "s/--device-name.*/--device-name \"$DEVICE_NAME\"/" /etc/init.d/aircast
+        # Check if the device name is not empty
+        if [ -z "$DEVICE_NAME" ]; then
+            whiptail --msgbox "Device name cannot be empty." 8 45
+        else
+            # Update the startup script with the new name
+            sed -i "s/--device-name.*/--device-name \"$DEVICE_NAME\"/" /etc/init.d/aircast
 
-        # Restart the service
-        /etc/init.d/aircast restart
-        whiptail --msgbox "Device name changed and AirCast restarted." 8 45
+            # Restart the service
+            /etc/init.d/aircast restart
+            whiptail --msgbox "Device name changed and AirCast restarted." 8 45
+        fi
         ;;
     3)
         # Restart AirCast
