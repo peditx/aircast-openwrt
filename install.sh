@@ -34,7 +34,7 @@ esac
 opkg update
 opkg install curl || opkg install wget
 
-# 3. Define repository URL and determine binary URL
+# 3. Define repository URL and determine the binary URL
 REPO_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files"
 if curl --head --silent --fail "$REPO_URL/aircast-linux-$AIRCAST_ARCH-static" > /dev/null; then
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH-static"
@@ -57,7 +57,7 @@ echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# 6. Create the XML configuration file as config.xml in /etc
+# 6. Create the configuration file as config.xml in /etc
 cat <<EOF > /etc/config.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <config>
@@ -67,10 +67,8 @@ cat <<EOF > /etc/config.xml
 </config>
 EOF
 
-# Rename the file to "config.xml" so that AirCast finds it by default.
-mv /etc/config.xml /etc/config.xml
-
-# 7. Create the init.d service script for AirCast that forces a working directory of /etc
+# 7. Create the init.d service script for AirCast
+#     This script changes directory to /etc so that AirCast finds config.xml in its working directory.
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
@@ -78,9 +76,7 @@ STOP=10
 USE_PROCD=1
 
 start_service() {
-    # Change directory to /etc so that "config.xml" is in the working directory,
-    # then run AirCast with the -i option so it loads /etc/config.xml.
-    cd /etc && /usr/bin/aircast -i config.xml
+    cd /etc && /usr/bin/aircast
 }
 EOF
 chmod +x /etc/init.d/aircast
@@ -89,7 +85,7 @@ chmod +x /etc/init.d/aircast
 /etc/init.d/aircast enable
 /etc/init.d/aircast start
 
-# 9. Display the service status
+# 9. Display service status
 echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
 ps | grep aircast
 
