@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Detect system architecture
+# 1. Detect system architecture
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64)
@@ -30,37 +30,34 @@ case "$ARCH" in
         ;;
 esac
 
-# Update package list and install curl (or wget if curl is not available)
+# 2. Update package list and install required packages
 opkg update
 opkg install curl || opkg install wget
 
-# Define repository URL
+# 3. Define repository URL and determine binary URL
 REPO_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files"
-
-# Try to download the static version first; if unavailable, use the normal version
 if curl --head --silent --fail "$REPO_URL/aircast-linux-$AIRCAST_ARCH-static" > /dev/null; then
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH-static"
 else
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH"
 fi
 
-# Stop any running AirCast processes
-echo "Stopping AirCast processes..."
+# 4. Stop any running AirCast processes and remove old binary
+echo "Stopping any running AirCast processes..."
 killall aircast
 sleep 2
 
-# Remove the old binary if it exists
 if [ -f /usr/bin/aircast ]; then
     echo "Removing old AirCast binary..."
     rm /usr/bin/aircast
 fi
 
-# Download the new AirCast binary
+# 5. Download the new AirCast binary
 echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# Create the default config file (config.xml) in /etc
+# 6. Create the configuration file as config.xml in /etc
 cat <<EOF > /etc/config.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <config>
@@ -70,7 +67,7 @@ cat <<EOF > /etc/config.xml
 </config>
 EOF
 
-# Create the init.d script for AirCast service
+# 7. Create the init.d service script that changes directory to /etc
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
@@ -78,17 +75,17 @@ STOP=10
 USE_PROCD=1
 
 start_service() {
-    # Change directory to /etc so that config.xml is in the working directory
+    # Change to /etc so that config.xml is in the working directory
     cd /etc && /usr/bin/aircast
 }
 EOF
 chmod +x /etc/init.d/aircast
 
-# Enable and start the AirCast service
+# 8. Enable and start the AirCast service
 /etc/init.d/aircast enable
 /etc/init.d/aircast start
 
-# Display the status
+# 9. Display service status
 echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
 ps | grep aircast
 
