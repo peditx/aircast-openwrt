@@ -82,17 +82,17 @@ CHOICE=$(whiptail --title "AirCast Control" --menu "Choose an option" 15 50 4 \
 "3" "Restart AirCast" \
 "4" "Exit" 3>&1 1>&2 2>&3)
 
-case \$CHOICE in
+case "$CHOICE" in
     1)
         # Show AirCast status
         whiptail --msgbox "$(ps | grep aircast)" 20 60
         ;;
     2)
         # Change device name
-        DEVICE_NAME=\$(whiptail --inputbox "Enter the new name of the device:" 8 39 "AirCastDevice" 3>&1 1>&2 2>&3)
+        DEVICE_NAME=$(whiptail --inputbox "Enter the new name of the device:" 8 39 "AirCastDevice" 3>&1 1>&2 2>&3)
 
         # Update the startup script with new name
-        sed -i "s/--device-name.*/--device-name \"\$DEVICE_NAME\"/" /etc/init.d/aircast
+        sed -i "s/--device-name.*/--device-name \"$DEVICE_NAME\"/" /etc/init.d/aircast
 
         # Restart the service
         /etc/init.d/aircast restart
