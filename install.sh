@@ -34,7 +34,7 @@ esac
 opkg update
 opkg install curl || opkg install wget
 
-# 3. Define repository URL and determine the binary URL
+# 3. Define repository URL and determine binary URL
 REPO_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files"
 if curl --head --silent --fail "$REPO_URL/aircast-linux-$AIRCAST_ARCH-static" > /dev/null; then
     BINARY_URL="$REPO_URL/aircast-linux-$AIRCAST_ARCH-static"
@@ -57,26 +57,23 @@ echo "Downloading new AirCast binary..."
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# 6. Generate a reference config file if one does not exist, then overwrite with our settings.
-#    According to the docs, use "-i" to generate a reference file.
-if [ ! -f /etc/config.xml ]; then
-    echo "Generating reference config file..."
-    cd /etc && /usr/bin/aircast -i config.xml
-fi
+# 6. Generate a reference config file in /etc if it doesn't exist,
+# then modify it to set the desired interface and IP.
+echo "Generating reference config file..."
+cd /etc || exit 1
+/usr/bin/aircast -i config.xml
 
-# Overwrite /etc/config.xml with our desired settings.
-# (You can adjust these values as needed.)
-cat <<EOF > /etc/config.xml
-<?xml version="1.0" encoding="UTF-8"?>
-<config>
-    <interface>br-lan</interface>
-    <device_name>AirCastDevice</device_name>
-    <ip>10.1.1.1</ip>
-</config>
-EOF
+# At this point, a reference config.xml should be generated.
+# Update the configuration with your desired settings.
+# (Adjust the sed commands as needed based on the actual format of the reference file.)
+sed -i 's/<interface>.*<\/interface>/<interface>br-lan<\/interface>/' config.xml
+sed -i 's/<ip>.*<\/ip>/<ip>10.1.1.1<\/ip>/' config.xml
+# You can also update the device name if present:
+sed -i 's/<device_name>.*<\/device_name>/<device_name>AirCastDevice<\/device_name>/' config.xml
 
 # 7. Create the init.d service script for AirCast.
-#     This script changes the working directory to /etc (so that config.xml is found) before launching AirCast.
+# This script changes the working directory to /etc (so that config.xml is found)
+# and launches AirCast (which will load config.xml from the current directory).
 cat << 'EOF' > /etc/init.d/aircast
 #!/bin/sh /etc/rc.common
 START=99
