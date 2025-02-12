@@ -70,7 +70,10 @@ start_service() {
         BRIP="10.1.1.1"
     fi
     echo "Starting AirCast with IP: $BRIP"
-    /usr/bin/aircast -b "$BRIP"
+    procd_open_instance
+    procd_set_param command /usr/bin/aircast -b "$BRIP"
+    procd_set_param respawn
+    procd_close_instance
 }
 EOF
 chmod +x /etc/init.d/aircast
