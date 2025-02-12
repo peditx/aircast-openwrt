@@ -40,9 +40,16 @@ fi
 curl -L -o /usr/bin/aircast "$BINARY_URL" || wget -O /usr/bin/aircast "$BINARY_URL"
 chmod +x /usr/bin/aircast
 
-# Whiptail to get device name and IP address
+# Whiptail to get device name
 DEVICE_NAME=$(whiptail --inputbox "Enter the name of the device:" 8 39 "AirCastDevice" 3>&1 1>&2 2>&3)
-IP_ADDRESS=$(whiptail --inputbox "Enter the IP address for the device:" 8 39 "192.168.1.1" 3>&1 1>&2 2>&3)
+
+# Automatically get the IP address of the device (from br-lan interface)
+IP_ADDRESS=$(ip addr show br-lan | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+
+# If IP is not found, fallback to a default IP
+if [ -z "$IP_ADDRESS" ]; then
+    IP_ADDRESS="192.168.1.1"
+fi
 
 # Create service startup script with interface br-lan
 cat << EOF > /etc/init.d/aircast
@@ -65,36 +72,36 @@ chmod +x /etc/init.d/aircast
 /etc/init.d/aircast start
 
 # Create control script to manage AirCast
-cat << EOF > /usr/bin/aircast-control
+cat << 'EOF' > /usr/bin/aircast-control
 #!/bin/sh
 
 # Menu for managing AirCast devices
 CHOICE=$(whiptail --title "AirCast Control" --menu "Choose an option" 15 50 4 \
 "1" "Show AirCast status" \
-"2" "Change device name or IP" \
+"2" "Change device name" \
 "3" "Restart AirCast" \
 "4" "Exit" 3>&1 1>&2 2>&3)
 
 case \$CHOICE in
     1)
         # Show AirCast status
-        ps | grep aircast
+        whiptail --msgbox "$(ps | grep aircast)" 20 60
         ;;
     2)
-        # Change device name or IP
+        # Change device name
         DEVICE_NAME=\$(whiptail --inputbox "Enter the new name of the device:" 8 39 "AirCastDevice" 3>&1 1>&2 2>&3)
-        IP_ADDRESS=\$(whiptail --inputbox "Enter the new IP address for the device:" 8 39 "192.168.1.1" 3>&1 1>&2 2>&3)
 
-        # Update the startup script with new values
+        # Update the startup script with new name
         sed -i "s/--device-name.*/--device-name \"\$DEVICE_NAME\"/" /etc/init.d/aircast
-        sed -i "s/--ip.*/--ip \"\$IP_ADDRESS\"/" /etc/init.d/aircast
 
         # Restart the service
         /etc/init.d/aircast restart
+        whiptail --msgbox "Device name changed and AirCast restarted." 8 45
         ;;
     3)
         # Restart AirCast
         /etc/init.d/aircast restart
+        whiptail --msgbox "AirCast restarted." 8 45
         ;;
     4)
         # Exit the menu
