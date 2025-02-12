@@ -85,7 +85,8 @@ CHOICE=$(whiptail --title "AirCast Control" --menu "Choose an option" 15 50 4 \
 case "$CHOICE" in
     1)
         # Show AirCast status
-        whiptail --msgbox "$(ps | grep aircast)" 20 60
+        AIRCAST_STATUS=$(ps | grep aircast)
+        whiptail --msgbox "$AIRCAST_STATUS" 20 60
         ;;
     2)
         # Change device name
