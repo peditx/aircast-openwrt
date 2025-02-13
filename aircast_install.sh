@@ -17,7 +17,7 @@ echo -e "${MAGENTA}
 | |   ( (/ /| |__/ /| | |__ / /\ \   | |___| |___ |
 |_|    \____)_____/ |_|\___)_/  \_\   \_____/(___/ 
                                                    
-                                              E Z P A S S W A L L v2 ${NC}"
+                                             AirCast by PeDitX ${NC}"
 sleep 3
 
 # 1. Detect system architecture
