@@ -1,4 +1,24 @@
 #!/bin/sh
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+MAGENTA='\033[0;35m'
+CYAN='\033[0;36m'
+GRAY='\033[0;37m'
+NC='\033[0m' # No Color
+
+
+echo -e "${MAGENTA} 
+ ______      _____   _      _    _     _____       
+(_____ \    (____ \ (_)_   \ \  / /   / ___ \      
+ _____) )___ _   \ \ _| |_  \ \/ /   | |   | | ___ 
+|  ____/ _  ) |   | | |  _)  )  (    | |   | |/___)
+| |   ( (/ /| |__/ /| | |__ / /\ \   | |___| |___ |
+|_|    \____)_____/ |_|\___)_/  \_\   \_____/(___/ 
+                                                   
+                                              E Z P A S S W A L L v2 ${NC}"
+sleep 3
 
 # 1. Detect system architecture
 ARCH=$(uname -m)
@@ -86,7 +106,7 @@ chmod +x /etc/init.d/aircast
 cat << 'EOF' > /usr/bin/aircast-control
 #!/bin/sh
 
-action=$(whiptail --title "AirCast Control" --menu "Choose an option:" 15 50 4 \
+action=$(whiptail --title "PeDitX Os - AirCast Control" --menu "Choose an option:" 15 50 4 \
     "status" "Check AirCast status" \
     "restart" "Restart AirCast" \
     "on" "Start AirCast service" \
@@ -113,7 +133,7 @@ EOF
 chmod +x /usr/bin/aircast-control
 
 # 9. Display service status
-echo "\n✅ AirCast installation and setup completed! Device is ready to cast."
+echo "\✅ AirCast installation and setup completed! Device is ready to cast. Made By PeDitX https://t.me/peditx"
 ps | grep aircast
 
-echo "\nThe bridge interface (br-lan) is configured to handle DHCP."
+echo "\The bridge interface (br-lan) is configured to handle DHCP."
