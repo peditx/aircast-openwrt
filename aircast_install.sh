@@ -1,5 +1,5 @@
 #!/bin/sh
-echo ">>> Starting The Definitive Air-Cast Installation (v49.9)..."
+echo ">>> Starting The Definitive Air-Cast Installation (v49.10)..."
 
 # 1. Install Dependencies
 echo "Updating package lists..."
@@ -130,12 +130,10 @@ cat > /usr/lib/lua/luci/controller/aircast.lua <<'EoL'
 module("luci.controller.aircast", package.seeall)
 
 function index()
-    -- Create the parent menu entry
-    entry({"admin", "peditxos_tools"}, firstchild(), "PeDitXOS Tools", 80).dependent = false
-    -- Place the aircast entry inside it
-    entry({"admin", "peditxos_tools", "aircast"}, template("aircast_status"), "Air-Cast", 10).dependent = true
+    -- This entry creates the URL .../admin/peditxos and the menu item "PeDitXOS Tools"
+    entry({"admin", "peditxos"}, template("aircast_status"), "PeDitXOS Tools", 80).dependent = true
     
-    -- The API entry remains hidden
+    -- The API entry remains hidden and at the same path for the JS to work
     local api_entry = entry({"admin", "services", "aircast_api"}, call("api_handler"), nil)
     api_entry.leaf = true
     api_entry.sysauth = false
@@ -490,7 +488,7 @@ EoL
 /etc/init.d/aircast enable
 /etc/init.d/aircast restart
 
-echo ">>> Air-Cast installation v49.9 (Definitive Fix) is complete. This is the most stable version. Please test. 🏆"
+echo ">>> Air-Cast installation v49.10 (Definitive Fix) is complete. This is the most stable version. Please test. 🏆"
 cat << "EoL"
 
  ______      _____   _      _    _     _____       
