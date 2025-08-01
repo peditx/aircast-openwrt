@@ -1,5 +1,5 @@
 #!/bin/sh
-echo ">>> Starting The Final & Complete Air-Cast Installation (v25.0)..."
+echo ">>> Starting The Final Direct Read/Write Air-Cast Installation (v27.0)..."
 
 # 1. پاکسازی فایل‌های قدیمی
 rm -f /tmp/aircast_lua.log
@@ -53,17 +53,15 @@ rm -f "$CHECKSUM_FILE_PATH"
 chmod +x "$BIN_PATH"
 ln -sf "$BIN_PATH" "$SYMLINK_PATH"
 
-# 4. ایجاد اسکریپت کمکی نهایی (با روش نوشتن مستقیم)
+# 4. ایجاد اسکریپت کمکی برای ذخیره‌سازی (نوشتن مستقیم)
 cat > "$HELPER_SCRIPT_PATH" <<'EoL'
 #!/bin/sh
 JSON_PAYLOAD="$1"
 CONFIG_FILE="/etc/config/aircast"
 TEMP_FILE="/tmp/aircast.conf.tmp"
-# Start fresh by writing the global section to a temporary file.
 echo "config aircast 'global'" > "$TEMP_FILE"
 echo "	option enabled '1'" >> "$TEMP_FILE"
 echo "" >> "$TEMP_FILE"
-# Parse the incoming JSON and append new device blocks to the temp file.
 echo "$JSON_PAYLOAD" | jsonfilter -e '@.devices[*]' | while read -r device_json; do
     IP=$(echo "$device_json" | jsonfilter -e '@.ip')
     NAME=$(echo "$device_json" | jsonfilter -e '@.name')
@@ -73,7 +71,6 @@ echo "$JSON_PAYLOAD" | jsonfilter -e '@.devices[*]' | while read -r device_json;
     echo "	option enabled '1'" >> "$TEMP_FILE"
     echo "" >> "$TEMP_FILE"
 done
-# Atomically replace the original config file with the new content.
 mv "$TEMP_FILE" "$CONFIG_FILE"
 exit 0
 EoL
@@ -134,7 +131,7 @@ stop_service() {
 EoL
 chmod +x /etc/init.d/aircast
 
-# 7. کنترلر LuCI با تمام قابلیت‌ها
+# 7. کنترلر LuCI با خواندن و نوشتن مستقیم
 cat > /usr/lib/lua/luci/controller/aircast.lua <<'EoL'
 module("luci.controller.aircast", package.seeall)
 
@@ -153,9 +150,7 @@ function api_handler()
         local status_output = luci.sys.exec("/etc/init.d/aircast status 2>/dev/null")
         local running = (string.match(status_output, "running") ~= nil)
         local ip = luci.sys.exec("ip addr show br-lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1"):gsub("\n","")
-        if ip == "" then
-            ip = luci.sys.exec("ip addr show lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1"):gsub("\n","")
-        end
+        if ip == "" then ip = luci.sys.exec("ip addr show lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1"):gsub("\n","") end
         if ip == "" then ip = "N/A" end
         luci.http.write_json({ running = running, ip = ip })
 
@@ -164,7 +159,7 @@ function api_handler()
         luci.http.write_json({ success = true })
 
     elseif action == "get_devices" then
-        -- Restored DHCP lease reading logic
+        -- Read DHCP leases
         local leases_raw = luci.sys.exec("cat /tmp/dhcp.leases 2>/dev/null")
         local dhcp_devices = {}
         if leases_raw and leases_raw ~= "" then
@@ -177,13 +172,31 @@ function api_handler()
             end
         end
 
-        local uci = luci.model.uci.cursor()
+        -- *** THE FINAL FIX: Read enabled devices directly from the config file line-by-line ***
         local enabled_devices = {}
-        uci:foreach("aircast", "device", function(s)
-            if s.enabled == "1" then
-                table.insert(enabled_devices, { ip = s.ip, name = s.name or s.ip }) 
+        local current_device = nil
+        local f = io.open("/etc/config/aircast", "r")
+        if f then
+            for line in f:lines() do
+                if line:match("^config device") then
+                    current_device = {}
+                elseif current_device and line:match("^%s*option name") then
+                    current_device.name = line:match("option name%s+'([^']+)'") or ""
+                elseif current_device and line:match("^%s*option ip") then
+                    current_device.ip = line:match("option ip%s+'([^']+)'") or ""
+                elseif current_device and (line:match("^%s*$") or line:match("^config")) then
+                    if current_device.ip and current_device.name then
+                        table.insert(enabled_devices, current_device)
+                    end
+                    current_device = (line:match("^config device")) and {} or nil
+                end
             end
-        end)
+            f:close()
+            if current_device and current_device.ip and current_device.name then
+                table.insert(enabled_devices, current_device)
+            end
+        end
+        
         luci.http.write_json({ dhcp = dhcp_devices, enabled = enabled_devices })
 
     elseif action == "save_config" then
@@ -439,4 +452,4 @@ EoL
 /etc/init.d/aircast enable
 /etc/init.d/aircast restart
 
-echo ">>> Air-Cast installation v25.0 (Final & Complete) is complete. This is it. Please test. 🚀"
+echo ">>> Air-Cast installation v27.0 (Direct Read/Write) is complete. This is the most stable version. Please test. 🙏"
