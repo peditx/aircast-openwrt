@@ -1,8 +1,8 @@
 #!/bin/sh
-echo ">>> Starting The Final Direct Read/Write Air-Cast Installation (v27.0)..."
+echo ">>> Starting The Blackbox-Fix Air-Cast Installation (v29.0)..."
 
 # 1. پاکسازی فایل‌های قدیمی
-rm -f /tmp/aircast_lua.log
+rm -f /tmp/aircast_lua.log /tmp/aircast_ips.txt /tmp/aircast_names.txt /tmp/aircast_helper.log
 
 # 2. مسیرهای نصب و تشخیص معماری
 INSTALL_DIR="/etc/aircast"
@@ -53,25 +53,61 @@ rm -f "$CHECKSUM_FILE_PATH"
 chmod +x "$BIN_PATH"
 ln -sf "$BIN_PATH" "$SYMLINK_PATH"
 
-# 4. ایجاد اسکریپت کمکی برای ذخیره‌سازی (نوشتن مستقیم)
+# 4. ایجاد اسکریپت کمکی با قابلیت گزارش‌گیری دقیق (جعبه سیاه)
 cat > "$HELPER_SCRIPT_PATH" <<'EoL'
 #!/bin/sh
+LOG_FILE="/tmp/aircast_helper.log"
+log() {
+    echo "[$(date)] - $1" >> "$LOG_FILE"
+}
+
+log "--- Helper script started ---"
 JSON_PAYLOAD="$1"
 CONFIG_FILE="/etc/config/aircast"
 TEMP_FILE="/tmp/aircast.conf.tmp"
+
+log "Received JSON payload: $JSON_PAYLOAD"
+
 echo "config aircast 'global'" > "$TEMP_FILE"
 echo "	option enabled '1'" >> "$TEMP_FILE"
 echo "" >> "$TEMP_FILE"
-echo "$JSON_PAYLOAD" | jsonfilter -e '@.devices[*]' | while read -r device_json; do
-    IP=$(echo "$device_json" | jsonfilter -e '@.ip')
-    NAME=$(echo "$device_json" | jsonfilter -e '@.name')
+log "Global section written to $TEMP_FILE"
+
+echo "$JSON_PAYLOAD" | jsonfilter -e '@.devices[*].ip' > /tmp/aircast_ips.txt
+echo "$JSON_PAYLOAD" | jsonfilter -e '@.devices[*].name' > /tmp/aircast_names.txt
+log "Extracted IPs and Names to temp files."
+
+log "Content of /tmp/aircast_ips.txt:"
+cat /tmp/aircast_ips.txt >> "$LOG_FILE"
+log "Content of /tmp/aircast_names.txt:"
+cat /tmp/aircast_names.txt >> "$LOG_FILE"
+
+log "Starting to process with paste and while loop..."
+paste /tmp/aircast_names.txt /tmp/aircast_ips.txt | while read -r name ip; do
+    log "Looping... Name: '$name', IP: '$ip'"
+    if [ -z "$ip" ]; then
+        log "Skipping empty line."
+        continue
+    fi
     echo "config device" >> "$TEMP_FILE"
-    echo "	option name '$NAME'" >> "$TEMP_FILE"
-    echo "	option ip '$IP'" >> "$TEMP_FILE"
+    echo "	option name '$name'" >> "$TEMP_FILE"
+    echo "	option ip '$ip'" >> "$TEMP_FILE"
     echo "	option enabled '1'" >> "$TEMP_FILE"
     echo "" >> "$TEMP_FILE"
+    log "Appended device to $TEMP_FILE"
 done
+
+log "Loop finished."
+rm -f /tmp/aircast_ips.txt /tmp/aircast_names.txt
+log "Cleaned up ip/name temp files."
+
+log "Final content of $TEMP_FILE before move:"
+cat "$TEMP_FILE" >> "$LOG_FILE"
+
 mv "$TEMP_FILE" "$CONFIG_FILE"
+log "Moved $TEMP_FILE to $CONFIG_FILE. Move command exit status: $?"
+
+log "--- Helper script finished ---"
 exit 0
 EoL
 chmod +x "$HELPER_SCRIPT_PATH"
@@ -131,7 +167,7 @@ stop_service() {
 EoL
 chmod +x /etc/init.d/aircast
 
-# 7. کنترلر LuCI با خواندن و نوشتن مستقیم
+# 7. کنترلر LuCI با خواندن مستقیم
 cat > /usr/lib/lua/luci/controller/aircast.lua <<'EoL'
 module("luci.controller.aircast", package.seeall)
 
@@ -159,7 +195,6 @@ function api_handler()
         luci.http.write_json({ success = true })
 
     elseif action == "get_devices" then
-        -- Read DHCP leases
         local leases_raw = luci.sys.exec("cat /tmp/dhcp.leases 2>/dev/null")
         local dhcp_devices = {}
         if leases_raw and leases_raw ~= "" then
@@ -172,7 +207,6 @@ function api_handler()
             end
         end
 
-        -- *** THE FINAL FIX: Read enabled devices directly from the config file line-by-line ***
         local enabled_devices = {}
         local current_device = nil
         local f = io.open("/etc/config/aircast", "r")
@@ -452,4 +486,4 @@ EoL
 /etc/init.d/aircast enable
 /etc/init.d/aircast restart
 
-echo ">>> Air-Cast installation v27.0 (Direct Read/Write) is complete. This is the most stable version. Please test. 🙏"
+echo ">>> Air-Cast installation v28.0 (The User's Fix) is complete. This is the definitive version. Please test. 🏆"
