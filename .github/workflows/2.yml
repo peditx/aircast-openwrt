@@ -1,4 +1,4 @@
-name: Generate and Manage Individual File Checksums
+name: Generate Checksums and Upload as Artifact
 
 on:
   push:
@@ -7,82 +7,57 @@ on:
     paths:
       - 'files/**'
       - '!.github/**'
-      - '!files/**/*.sha256' # از اجرای مجدد به خاطر فایل‌های checksum جلوگیری می‌کند
+      - '!files/**/*.sha256'
 
   workflow_dispatch:
 
 jobs:
-  generate-checksums:
-    permissions:
-      contents: write
-
+  generate-and-upload:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate and Save Individual Checksums
-        id: generate_checksums
+      - name: Generate Checksum Files
         run: |
-          TARGET_DIR="files"
+          echo "--- Starting Checksum Generation ---"
+          # 1. یک پوشه تمیز برای نگهداری فایل‌های خروجی می‌سازیم
+          mkdir -p generated_checksums
+
+          # 2. تمام فایل‌های داخل پوشه 'files' را پیدا می‌کنیم
+          find files -type f -not -name "*.sha256" | while read -r file; do
+            echo "Processing file: $file"
+            checksum=$(sha256sum "$file" | awk '{print $1}')
+            base_filename=$(basename "$file")
+            
+            # 3. ساختار پوشه اصلی را در پوشه خروجی بازسازی می‌کنیم
+            # برای مثال، اگر فایل در 'files/sub/a.txt' باشد،
+            # مسیر نسبی 'sub' خواهد بود.
+            relative_dir=$(dirname "${file#files/}")
+            
+            # اگر فایل در ریشه 'files' باشد، مسیر نسبی '.' می‌شود که مشکلی ندارد
+            if [ "$relative_dir" != "." ]; then
+              mkdir -p "generated_checksums/$relative_dir"
+              output_path="generated_checksums/$relative_dir/$base_filename.sha256"
+            else
+              output_path="generated_checksums/$base_filename.sha256"
+            fi
+            
+            # 4. فایل checksum را در پوشه خروجی می‌نویسیم
+            echo "$checksum *$base_filename" > "$output_path"
+            echo "--> Created: $output_path"
+          done
+          echo "--- Generation Complete ---"
           
-          cat << 'EOF' > generate_individual_checksums.py
-          import os
-          import hashlib
-          import sys
+          echo "--- Listing generated files for artifact ---"
+          ls -R generated_checksums
 
-          def manage_individual_checksums(root_dir):
-              # پیدا کردن تمام فایل‌های اصلی (غیر از خود checksum ها)
-              for dirpath, _, filenames in os.walk(root_dir):
-                  # از پردازش پوشه گیت صرف نظر می‌کنیم
-                  if ".git" in dirpath:
-                      continue
-                  
-                  for filename in filenames:
-                      # فقط فایل‌هایی را پردازش کن که checksum نیستند
-                      if filename.endswith('.sha256'):
-                          continue
-
-                      file_path = os.path.join(dirpath, filename)
-                      checksum_file_path = f"{file_path}.sha256"
-                      
-                      # محاسبه هش SHA256
-                      sha256_hash = hashlib.sha256()
-                      with open(file_path, "rb") as f:
-                          for byte_block in iter(lambda: f.read(4096), b""):
-                              sha256_hash.update(byte_block)
-                      
-                      digest = sha256_hash.hexdigest()
-                      
-                      # نوشتن هش در فایل .sha256 مخصوص همان فایل
-                      # فرمت استاندارد: هش *نام_فایل
-                      with open(checksum_file_path, "w", encoding="utf-8") as f_out:
-                          f_out.write(f"{digest} *{os.path.basename(file_path)}\n")
-                      
-                      print(f"--> Generated/Updated checksum for: {filename}")
-
-          if __name__ == "__main__":
-              if len(sys.argv) > 1:
-                  target_directory = sys.argv[1]
-                  if os.path.isdir(target_directory):
-                      manage_individual_checksums(target_directory)
-                  else:
-                      print(f"Error: Directory '{target_directory}' not found.")
-                      sys.exit(1)
-              else:
-                  print("Error: Please provide the target directory.")
-                  sys.exit(1)
-          EOF
-
-          # اجرای اسکریپت پایتون
-          python generate_individual_checksums.py $TARGET_DIR
-
-      - name: Commit and push if changed
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - name: Upload Checksum Files as Artifact
+        uses: actions/upload-artifact@v4
         with:
-          commit_message: "ci: Update individual file checksums"
-          # الگو برای پیدا کردن تمام فایل‌های .sha256 جدید یا تغییر یافته
-          file_pattern: "files/**/*.sha256"
-          commit_user_name: "GitHub Actions Bot"
-          commit_user_email: "github-actions[bot]@users.noreply.github.com"
+          # نام فایل زیپی که دانلود خواهید کرد
+          name: checksum-files
+          # مسیری که فایل‌های ساخته شده در آن قرار دارند
+          path: generated_checksums/
+          # فایل‌ها تا ۵ روز برای دانلود باقی می‌مانند
+          retention-days: 5
