@@ -1,21 +1,24 @@
-# نام ورک‌فلو که در صفحه Actions گیت‌هاب نمایش داده می‌شود
+# نام ورک‌فلو
 name: Generate File Checksums
 
 on:
-  # اجرا در زمان push به شاخه main، فقط اگر فایل‌ها در مسیر مشخص شده تغییر کنند
   push:
     branches:
       - main
     paths:
-      # --- اصلاح شد ---
       - 'files/**'
       - '!.github/**'
   
-  # اجازه می‌دهد که ورک‌فلو را به صورت دستی از تب Actions اجرا کنید
   workflow_dispatch:
 
 jobs:
   generate-checksums:
+    # --- این بخش اضافه شده است ---
+    # به این جاب اجازه نوشتن در ریپازیتوری را می‌دهد
+    permissions:
+      contents: write
+    # -----------------------------
+    
     runs-on: ubuntu-latest
     
     steps:
@@ -25,8 +28,6 @@ jobs:
       - name: Generate and Save Checksums
         id: generate_checksums
         run: |
-          # --- اصلاح شد ---
-          # مسیر پوشه‌ای که فایل‌های شما در آن قرار دارد
           TARGET_DIR="files"
           OUTPUT_FILE="checksums.sha256"
           
@@ -74,7 +75,6 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "ci: Update file checksums"
-          # --- اصلاح شد ---
           file_pattern: files/checksums.sha256
           commit_user_name: "GitHub Actions Bot"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
