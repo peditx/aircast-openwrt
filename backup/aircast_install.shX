@@ -1,15 +1,20 @@
 #!/bin/sh
-echo ">>> Starting The File-Transfer-Fix Air-Cast Installation (v30.0)..."
+echo ">>> Starting The Definitive Air-Cast Installation (v37.0)..."
 
-# 1. پاکسازی فایل‌های قدیمی
-rm -f /tmp/aircast_lua.log /tmp/aircast_ips.txt /tmp/aircast_names.txt /tmp/aircast_helper.log /tmp/aircast_payload.json
+# 1. Install Dependencies
+echo "Updating package lists..."
+opkg update
+echo "Installing dependencies (curl, jsonfilter)..."
+opkg install curl jsonfilter
 
-# 2. مسیرهای نصب و تشخیص معماری
+# 2. پاکسازی فایل‌های قدیمی
+rm -f /usr/bin/aircast_save_helper.sh /tmp/aircast*
+
+# 3. مسیرهای نصب و تشخیص معماری
 INSTALL_DIR="/etc/aircast"
 BIN_PATH="$INSTALL_DIR/aircast"
 SYMLINK_PATH="/usr/bin/aircast"
 CONFIG_FILE="/etc/config/aircast"
-HELPER_SCRIPT_PATH="/usr/bin/aircast_save_helper.sh"
 mkdir -p "$INSTALL_DIR"
 
 ARCH=$(uname -m)
@@ -26,7 +31,7 @@ case "$ARCH" in
         ;;
 esac
 
-# 3. دانلود و تأیید اعتبار باینری
+# 4. دانلود و تأیید اعتبار باینری
 BINARY_FILENAME="aircast-linux-$AIRCAST_ARCH"
 CHECKSUM_FILENAME="$BINARY_FILENAME.sha256"
 DOWNLOAD_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files/$BINARY_FILENAME"
@@ -52,72 +57,6 @@ echo "Checksum verified. ✨"
 rm -f "$CHECKSUM_FILE_PATH"
 chmod +x "$BIN_PATH"
 ln -sf "$BIN_PATH" "$SYMLINK_PATH"
-
-# 4. ایجاد اسکریپت کمکی که از فایل می‌خواند
-cat > "$HELPER_SCRIPT_PATH" <<'EoL'
-#!/bin/sh
-LOG_FILE="/tmp/aircast_helper.log"
-log() {
-    echo "[$(date)] - $1" >> "$LOG_FILE"
-}
-
-log "--- Helper script started ---"
-JSON_PAYLOAD_FILE="/tmp/aircast_payload.json"
-CONFIG_FILE="/etc/config/aircast"
-TEMP_FILE="/tmp/aircast.conf.tmp"
-
-if [ ! -f "$JSON_PAYLOAD_FILE" ]; then
-    log "FATAL: Payload file not found at $JSON_PAYLOAD_FILE"
-    exit 1
-fi
-
-log "Reading JSON payload from $JSON_PAYLOAD_FILE"
-JSON_PAYLOAD=$(cat "$JSON_PAYLOAD_FILE")
-log "Payload content: $JSON_PAYLOAD"
-
-echo "config aircast 'global'" > "$TEMP_FILE"
-echo "	option enabled '1'" >> "$TEMP_FILE"
-echo "" >> "$TEMP_FILE"
-log "Global section written to $TEMP_FILE"
-
-echo "$JSON_PAYLOAD" | jsonfilter -e '@.devices[*].ip' > /tmp/aircast_ips.txt
-echo "$JSON_PAYLOAD" | jsonfilter -e '@.devices[*].name' > /tmp/aircast_names.txt
-log "Extracted IPs and Names to temp files."
-
-log "Content of /tmp/aircast_ips.txt:"
-cat /tmp/aircast_ips.txt >> "$LOG_FILE"
-log "Content of /tmp/aircast_names.txt:"
-cat /tmp/aircast_names.txt >> "$LOG_FILE"
-
-log "Starting to process with paste and while loop..."
-paste /tmp/aircast_names.txt /tmp/aircast_ips.txt | while read -r name ip; do
-    log "Looping... Name: '$name', IP: '$ip'"
-    if [ -z "$ip" ]; then
-        log "Skipping empty line."
-        continue
-    fi
-    echo "config device" >> "$TEMP_FILE"
-    echo "	option name '$name'" >> "$TEMP_FILE"
-    echo "	option ip '$ip'" >> "$TEMP_FILE"
-    echo "	option enabled '1'" >> "$TEMP_FILE"
-    echo "" >> "$TEMP_FILE"
-    log "Appended device to $TEMP_FILE"
-done
-
-log "Loop finished."
-rm -f /tmp/aircast_ips.txt /tmp/aircast_names.txt
-log "Cleaned up ip/name temp files."
-
-log "Final content of $TEMP_FILE before move:"
-cat "$TEMP_FILE" >> "$LOG_FILE"
-
-mv "$TEMP_FILE" "$CONFIG_FILE"
-log "Moved $TEMP_FILE to $CONFIG_FILE. Move command exit status: $?"
-
-log "--- Helper script finished ---"
-exit 0
-EoL
-chmod +x "$HELPER_SCRIPT_PATH"
 
 # 5. ایجاد فایل تنظیمات اولیه و قوانین فایروال
 cat > "$CONFIG_FILE" <<'EoL'
@@ -174,7 +113,7 @@ stop_service() {
 EoL
 chmod +x /etc/init.d/aircast
 
-# 7. کنترلر LuCI که داده را در فایل می‌نویسد
+# 7. کنترلر LuCI با معماری خواندن و نوشتن مستقیم
 cat > /usr/lib/lua/luci/controller/aircast.lua <<'EoL'
 module("luci.controller.aircast", package.seeall)
 
@@ -214,6 +153,7 @@ function api_handler()
             end
         end
 
+        -- *** THE FINAL FIX: Read enabled devices directly from the config file line-by-line ***
         local enabled_devices = {}
         local current_device = nil
         local f = io.open("/etc/config/aircast", "r")
@@ -226,7 +166,7 @@ function api_handler()
                 elseif current_device and line:match("^%s*option ip") then
                     current_device.ip = line:match("option ip%s+'([^']+)'") or ""
                 elseif current_device and (line:match("^%s*$") or line:match("^config")) then
-                    if current_device.ip and current_device.name then
+                    if current_device and current_device.ip and current_device.name then
                         table.insert(enabled_devices, current_device)
                     end
                     current_device = (line:match("^config device")) and {} or nil
@@ -240,31 +180,75 @@ function api_handler()
         
         luci.http.write_json({ dhcp = dhcp_devices, enabled = enabled_devices })
 
-    elseif action == "save_config" then
-        -- *** THE FINAL FIX: Write payload to a file first ***
-        local data = luci.http.content()
-        if data then
-            local payload_file = io.open("/tmp/aircast_payload.json", "w")
-            payload_file:write(data)
-            payload_file:close()
-            
-            local command = "/usr/bin/aircast_save_helper.sh"
-            local exec_status = os.execute(command)
-            
-            if exec_status == 0 then
+    elseif action == "add_device" then
+        local ip = luci.http.formvalue("ip")
+        local name = luci.http.formvalue("name")
+        if ip and name then
+            local safe_ip = "'" .. ip:gsub("'", "'\\''") .. "'"
+            local safe_name = "'" .. name:gsub("'", "'\\''") .. "'"
+            os.execute("uci add aircast device >/dev/null 2>&1")
+            os.execute("uci set aircast.@device[-1].ip=" .. safe_ip)
+            os.execute("uci set aircast.@device[-1].name=" .. safe_name)
+            os.execute("uci set aircast.@device[-1].enabled='1'")
+            local commit_status = os.execute("uci commit aircast")
+            if commit_status == 0 then
                 os.execute("/etc/init.d/aircast restart >/dev/null 2>&1 &")
                 luci.http.write_json({ success = true })
             else
-                luci.http.write_json({ success = false, message = "Helper script failed with code " .. tostring(exec_status) })
+                luci.http.write_json({ success = false, message = "UCI commit failed" })
             end
         else
-            luci.http.write_json({ success = false, message = "No data received from browser." })
+            luci.http.write_json({ success = false, message = "Missing IP or Name" })
+        end
+
+    elseif action == "remove_device" then
+        local ip = luci.http.formvalue("ip")
+        if ip then
+            -- Rebuild the file without the specified IP
+            local temp_file = io.open("/tmp/aircast.conf.tmp", "w")
+            if temp_file then
+                temp_file:write("config aircast 'global'\n")
+                temp_file:write("\toption enabled '1'\n\n")
+
+                local f = io.open("/etc/config/aircast", "r")
+                if f then
+                    local current_device_ip = nil
+                    local block_buffer = {}
+                    for line in f:lines() do
+                        if line:match("^config device") then
+                            if #block_buffer > 0 then
+                                if current_device_ip ~= ip then
+                                    temp_file:write(table.concat(block_buffer, "\n") .. "\n\n")
+                                end
+                            end
+                            block_buffer = { line }
+                            current_device_ip = nil
+                        elseif line:match("^%s*option ip") then
+                            current_device_ip = line:match("option ip%s+'([^']+)'")
+                            table.insert(block_buffer, line)
+                        elseif line:match("^%s*option") then
+                             table.insert(block_buffer, line)
+                        end
+                    end
+                    f:close()
+                    -- Write the last block if it's not the one to be deleted
+                    if #block_buffer > 0 and current_device_ip ~= ip then
+                        temp_file:write(table.concat(block_buffer, "\n") .. "\n\n")
+                    end
+                end
+                temp_file:close()
+                os.execute("mv /tmp/aircast.conf.tmp /etc/config/aircast")
+                os.execute("/etc/init.d/aircast restart >/dev/null 2>&1 &")
+            end
+            luci.http.write_json({ success = true })
+        else
+            luci.http.write_json({ success = false, message = "Missing IP" })
         end
     end
 end
 EoL
 
-# 8. فایل View با تمام پنل‌ها
+# 8. فایل View با معماری دستورات مستقیم
 cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
 <%+header%>
 <style>
@@ -325,9 +309,6 @@ cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
         <thead><tr><th>Hostname</th><th>IP Address</th><th>Action</th></tr></thead>
         <tbody id="enabledDeviceList"><tr><td colspan="3" style="text-align:center;">No devices enabled.</td></tr></tbody>
     </table>
-    <div class="btn-container">
-        <button class="glass-btn" id="saveBtn" onclick="saveConfig()" disabled>Save & Apply Changes</button>
-    </div>
 </div>
 
 <div class="glass-panel">
@@ -338,11 +319,10 @@ cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
 <script type="text/javascript">
     const statusText = document.getElementById('statusText'), ipText = document.getElementById('ipText');
     const startBtn = document.getElementById('startBtn'), stopBtn = document.getElementById('stopBtn'), restartBtn = document.getElementById('restartBtn');
-    const loadDevicesBtn = document.getElementById('loadDevicesBtn'), saveBtn = document.getElementById('saveBtn');
+    const loadDevicesBtn = document.getElementById('loadDevicesBtn');
     const dhcpDeviceList = document.getElementById('dhcpDeviceList'), enabledDeviceList = document.getElementById('enabledDeviceList');
     const manualIpInput = document.getElementById('manualIp'), manualNameInput = document.getElementById('manualName');
     const debugPanel = document.getElementById('debug-panel');
-    let dhcpClients = [], enabledDevices = [];
     let logHistory = [];
 
     function escapeHTML(str) {
@@ -361,12 +341,7 @@ cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
         debugPanel.innerHTML = logHistory.map(entry => `<div style="color:${color}; border-bottom: 1px solid #444; padding: 2px 0;">${escapeHTML(entry)}</div>`).join('');
     }
 
-    function setSaveButtonState(enabled) {
-        saveBtn.disabled = !enabled;
-        logMessage(`Save button state set to: ${enabled ? 'ENABLED' : 'DISABLED'}`);
-    }
-
-    function renderTables() {
+    function renderTables(dhcpClients, enabledDevices) {
         logMessage('Rendering tables...');
         dhcpDeviceList.innerHTML = '';
         enabledDeviceList.innerHTML = '';
@@ -380,7 +355,7 @@ cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
                 if (!enabledIps.has(device.ip)) {
                     foundVisibleDevice = true;
                     const row = dhcpDeviceList.insertRow();
-                    row.innerHTML = `<td>${escapeHTML(device.name)}</td><td>${escapeHTML(device.ip)}</td><td><button class="glass-btn" onclick="addDevice('${escapeHTML(device.ip)}', '${escapeHTML(device.name)}')">Add</button></td>`;
+                    row.innerHTML = `<td>${escapeHTML(device.name)}</td><td>${escapeHTML(device.ip)}</td><td><button class="glass-btn" onclick="addDevice(this, '${escapeHTML(device.ip)}', '${escapeHTML(device.name)}')">Add</button></td>`;
                 }
             });
             if (!foundVisibleDevice) {
@@ -393,23 +368,46 @@ cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
         } else {
             enabledDevices.forEach(device => {
                 const row = enabledDeviceList.insertRow();
-                row.innerHTML = `<td>${escapeHTML(device.name)}</td><td>${escapeHTML(device.ip)}</td><td><button class="glass-btn" onclick="removeDevice('${escapeHTML(device.ip)}')">Remove</button></td>`;
+                row.innerHTML = `<td>${escapeHTML(device.name)}</td><td>${escapeHTML(device.ip)}</td><td><button class="glass-btn" onclick="removeDevice(this, '${escapeHTML(device.ip)}')">Remove</button></td>`;
             });
         }
         logMessage('Tables rendered successfully.', 'success');
     }
     
-    function addDevice(ip, name) {
-        if (enabledDevices.some(d => d.ip === ip)) return;
-        enabledDevices.push({ ip: ip, name: name });
-        renderTables();
-        setSaveButtonState(true);
+    function addDevice(btn, ip, name) {
+        btn.disabled = true;
+        btn.textContent = 'Adding...';
+        logMessage(`Adding device: ${name} (${ip})`);
+        const url = `<%=luci.dispatcher.build_url("admin/services/aircast_api")%>?action=add_device&ip=${encodeURIComponent(ip)}&name=${encodeURIComponent(name)}`;
+        XHR.get(url, null, function(x, data) {
+            if (data && data.success) {
+                logMessage('Device added successfully.', 'success');
+                loadAllDevices();
+            } else {
+                logMessage(`Failed to add device. Server response: ${JSON.stringify(data)}`, 'error');
+                alert('Failed to add device.');
+                btn.disabled = false;
+                btn.textContent = 'Add';
+            }
+        });
     }
 
-    function removeDevice(ip) {
-        enabledDevices = enabledDevices.filter(d => d.ip !== ip);
-        renderTables();
-        setSaveButtonState(true);
+    function removeDevice(btn, ip) {
+        btn.disabled = true;
+        btn.textContent = 'Removing...';
+        logMessage(`Removing device: ${ip}`);
+        const url = `<%=luci.dispatcher.build_url("admin/services/aircast_api")%>?action=remove_device&ip=${encodeURIComponent(ip)}`;
+        XHR.get(url, null, function(x, data) {
+            if (data && data.success) {
+                logMessage('Device removed successfully.', 'success');
+                loadAllDevices();
+            } else {
+                logMessage('Failed to remove device.', 'error');
+                alert('Failed to remove device.');
+                btn.disabled = false;
+                btn.textContent = 'Remove';
+            }
+        });
     }
 
     function addManualDevice() {
@@ -419,7 +417,8 @@ cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
             alert("Please enter a valid IP address.");
             return;
         }
-        addDevice(ip, name);
+        const btn = manualIpInput.nextElementSibling.nextElementSibling;
+        addDevice(btn, ip, name);
         manualIpInput.value = '';
         manualNameInput.value = '';
     }
@@ -454,35 +453,11 @@ cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
             loadDevicesBtn.textContent = 'Reload Device Lists';
             if (data) {
                 logMessage(`Received data. DHCP: ${data.dhcp ? data.dhcp.length : 0}, Enabled: ${data.enabled ? data.enabled.length : 0}`, 'success');
-                dhcpClients = Array.isArray(data.dhcp) ? data.dhcp : [];
-                enabledDevices = Array.isArray(data.enabled) ? data.enabled : [];
-                renderTables();
-                setSaveButtonState(false);
+                const dhcpClients = Array.isArray(data.dhcp) ? data.dhcp : [];
+                const enabledDevices = Array.isArray(data.enabled) ? data.enabled : [];
+                renderTables(dhcpClients, enabledDevices);
             } else {
                 logMessage('Failed to load device lists.', 'error');
-            }
-        });
-    }
-    
-    function saveConfig() {
-        logMessage('Save button clicked.');
-        setSaveButtonState(false);
-        saveBtn.textContent = 'Saving...';
-        const payload = { devices: enabledDevices };
-        logMessage(`Sending JSON to server: ${JSON.stringify(payload)}`, 'data');
-        XHR.post('<%=luci.dispatcher.build_url("admin/services/aircast_api")%>?action=save_config', JSON.stringify(payload), function(x, data) {
-            saveBtn.textContent = 'Save & Apply Changes';
-            if (data && data.success) {
-                logMessage('Server responded with SUCCESS.', 'success');
-                alert('Configuration saved successfully! The service is reloading.');
-                setTimeout(() => { 
-                    updateStatus();
-                    loadAllDevices();
-                }, 2000);
-            } else {
-                logMessage(`Server responded with FAILURE. Response: ${JSON.stringify(data)}`, 'error');
-                alert('Failed to save configuration.');
-                setSaveButtonState(true);
             }
         });
     }
@@ -501,4 +476,4 @@ EoL
 /etc/init.d/aircast enable
 /etc/init.d/aircast restart
 
-echo ">>> Air-Cast installation v29.0 (The Blackbox Fix) is complete. This is the definitive version. Please test. 🏆"
+echo ">>> Air-Cast installation v37.0 (Definitive Fix) is complete. This is the most stable version. Please test. 🏆"
