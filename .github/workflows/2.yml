@@ -22,7 +22,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate and Remove Stale Checksums
+      - name: 1. List files BEFORE script runs
+        run: |
+          echo "--- Listing contents of 'files' directory ---"
+          ls -R files || echo "Directory 'files' is empty or does not exist."
+          echo "---------------------------------------------"
+
+      - name: 2. Generate and Remove Stale Checksums
         run: |
           TARGET_DIR="files"
           
@@ -86,7 +92,19 @@ jobs:
 
           python manage_checksums.py $TARGET_DIR
 
-      - name: Commit and push if changed
+      - name: 3. List files AFTER script runs
+        run: |
+          echo "--- Listing contents of 'files' directory after script ---"
+          ls -R files || echo "Directory 'files' is empty or does not exist."
+          echo "--------------------------------------------------------"
+
+      - name: 4. Check Git status for changes
+        run: |
+          echo "--- Checking for uncommitted changes ---"
+          git status --porcelain
+          echo "----------------------------------------"
+
+      - name: 5. Commit and push if changed
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "ci: Update individual file checksums"
