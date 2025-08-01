@@ -32,7 +32,7 @@ case "$ARCH" in
 esac
 
 # 4. دانلود و تأیید اعتبار باینری
-BINARY_FILENAME="aircast-linux-$AIRCAST_ARCH"
+BINARY_FILENAME="aircast-linux-$AIRCAST_ARCH-static"
 CHECKSUM_FILENAME="$BINARY_FILENAME.sha256"
 DOWNLOAD_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files/$BINARY_FILENAME"
 CHECKSUM_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files/$CHECKSUM_FILENAME"
@@ -84,24 +84,37 @@ USE_PROCD=1
 BIN_PATH="/usr/bin/aircast"
 XML_CONFIG_PATH="/tmp/aircast_players.xml"
 generate_config() {
+    # Start with a clean file
     echo "<aircast>" > "$XML_CONFIG_PATH"
-    uci -q show aircast | grep '=.device' | cut -d. -f2 | while read -r section; do
-        enabled=$(uci -q get aircast."$section".enabled)
-        ip=$(uci -q get aircast."$section".ip)
+
+    # A more robust way to find all sections of type 'device'
+    # It finds lines like 'aircast.cfg12345=device' and extracts the full section name
+    uci -q show aircast | grep 'aircast\..*=device' | cut -d'=' -f1 | while read -r section_full_name; do
+        # section_full_name is now "aircast.cfg12345"
+        # We get the options for this specific section
+        enabled=$(uci -q get ${section_full_name}.enabled)
+        ip=$(uci -q get ${section_full_name}.ip)
+        name=$(uci -q get ${section_full_name}.name)
+
+        # Check if the device is enabled and has an IP
         if [ "$enabled" = "1" ] && [ -n "$ip" ]; then
-            echo "  <player><ip>$ip</ip><enabled>true</enabled></player>" >> "$XML_CONFIG_PATH"
+            echo "  <player><ip>$ip</ip><name>$name</name><enabled>true</enabled></player>" >> "$XML_CONFIG_PATH"
         fi
     done
+
+    # Close the XML file
     echo "</aircast>" >> "$XML_CONFIG_PATH"
 }
 start_service() {
     generate_config
+
     BRIP=$(ip addr show br-lan 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     [ -z "$BRIP" ] && BRIP=$(ip addr show lan 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     [ -z "$BRIP" ] && BRIP=$(ip addr show eth0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     [ -z "$BRIP" ] && BRIP="10.1.1.1"
+    
     procd_open_instance
-    procd_set_param command "$BIN_PATH" -b "$BRIP" -i "$XML_CONFIG_PATH"
+    procd_set_param command "$BIN_PATH" -b "$BRIP" -f "$XML_CONFIG_PATH"
     procd_set_param respawn
     procd_set_param file "/etc/config/aircast"
     procd_close_instance
