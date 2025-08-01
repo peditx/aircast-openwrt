@@ -7,13 +7,12 @@ on:
     paths:
       - 'files/**'
       - '!.github/**'
-      - '!**/*.sha256' # از اجرای مجدد workflow به خاطر فایل‌های checksum جلوگیری می‌کند
+      - '!**/*.sha256'
 
   workflow_dispatch:
 
 jobs:
   generate-checksums:
-    # به این جاب اجازه نوشتن در ریپازیتوری را می‌دهد
     permissions:
       contents: write
       
@@ -23,45 +22,48 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Generate and Save Individual Checksums
+      - name: 1. List files BEFORE generating checksums
+        run: |
+          echo "--- Listing files in 'files' directory before script execution ---"
+          ls -R files || echo "Directory 'files' not found or is empty."
+
+      - name: 2. Generate and Save Individual Checksums
         id: generate_checksums
         run: |
           TARGET_DIR="files"
           
-          # اسکریپت پایتون برای ساخت فایل‌های checksum جداگانه
           cat << 'EOF' > generate_checksums.py
           import os
           import hashlib
           import sys
 
           def create_individual_checksums(root_dir):
-              """
-              برای هر فایل در دایرکتوری مشخص شده، یک فایل .sha256 جداگانه ایجاد می‌کند.
-              """
+              processed_files_count = 0
               for dirpath, _, filenames in os.walk(root_dir):
                   for filename in filenames:
-                      # از پردازش فایل‌های checksum موجود صرف نظر می‌کند
                       if filename.endswith('.sha256') or ".git" in dirpath:
                           continue
                       
                       file_path = os.path.join(dirpath, filename)
                       output_filepath = f"{file_path}.sha256"
                       
-                      # محاسبه هش SHA256
                       sha256_hash = hashlib.sha256()
                       with open(file_path, "rb") as f:
-                          # خواندن فایل به صورت تکه‌تکه برای مدیریت فایل‌های بزرگ
                           for byte_block in iter(lambda: f.read(4096), b""):
                               sha256_hash.update(byte_block)
                       
                       digest = sha256_hash.hexdigest()
                       
-                      # نوشتن هش در فایل .sha256 مخصوص همان فایل
                       with open(output_filepath, "w", encoding="utf-8") as f_out:
-                          # فرمت استاندارد: هش *نام_فایل
                           f_out.write(f"{digest} *{os.path.basename(file_path)}\n")
                       
-                      print(f"Checksum for {filename} saved to {output_filepath}")
+                      print(f"--> Generated: {output_filepath}")
+                      processed_files_count += 1
+              
+              if processed_files_count == 0:
+                  print("No files found to process.")
+              else:
+                  print(f"\nSuccessfully processed {processed_files_count} file(s).")
 
           if __name__ == "__main__":
               if len(sys.argv) > 1:
@@ -76,14 +78,30 @@ jobs:
                   sys.exit(1)
           EOF
 
-          # اجرای اسکریپت پایتون
           python generate_checksums.py $TARGET_DIR
 
-      - name: Commit and push if changed
+      - name: 3. List files AFTER generating checksums
+        run: |
+          echo "--- Listing files in 'files' directory after script execution ---"
+          ls -R files || echo "Directory 'files' not found."
+
+      - name: 4. Check for changes to commit
+        id: check_changes
+        run: |
+          echo "--- Checking for files matching 'files/**/*.sha256' ---"
+          git status --porcelain
+          MODIFIED_FILES=$(git status --porcelain | grep -o "files/.*\.sha256" || echo "")
+          if [ -n "$MODIFIED_FILES" ]; then
+            echo "Found changes to commit:"
+            echo "$MODIFIED_FILES"
+          else
+            echo "No new or modified .sha256 files to commit."
+          fi
+
+      - name: 5. Commit and push if changed
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "ci: Update file checksums"
-          # الگو برای پیدا کردن تمام فایل‌های .sha256 در پوشه files و زیرپوشه‌های آن
           file_pattern: "files/**/*.sha256"
           commit_user_name: "GitHub Actions Bot"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
