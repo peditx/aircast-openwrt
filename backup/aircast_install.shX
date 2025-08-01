@@ -1,8 +1,8 @@
 #!/bin/sh
-echo ">>> Starting The Blackbox-Fix Air-Cast Installation (v29.0)..."
+echo ">>> Starting The File-Transfer-Fix Air-Cast Installation (v30.0)..."
 
 # 1. پاکسازی فایل‌های قدیمی
-rm -f /tmp/aircast_lua.log /tmp/aircast_ips.txt /tmp/aircast_names.txt /tmp/aircast_helper.log
+rm -f /tmp/aircast_lua.log /tmp/aircast_ips.txt /tmp/aircast_names.txt /tmp/aircast_helper.log /tmp/aircast_payload.json
 
 # 2. مسیرهای نصب و تشخیص معماری
 INSTALL_DIR="/etc/aircast"
@@ -53,7 +53,7 @@ rm -f "$CHECKSUM_FILE_PATH"
 chmod +x "$BIN_PATH"
 ln -sf "$BIN_PATH" "$SYMLINK_PATH"
 
-# 4. ایجاد اسکریپت کمکی با قابلیت گزارش‌گیری دقیق (جعبه سیاه)
+# 4. ایجاد اسکریپت کمکی که از فایل می‌خواند
 cat > "$HELPER_SCRIPT_PATH" <<'EoL'
 #!/bin/sh
 LOG_FILE="/tmp/aircast_helper.log"
@@ -62,11 +62,18 @@ log() {
 }
 
 log "--- Helper script started ---"
-JSON_PAYLOAD="$1"
+JSON_PAYLOAD_FILE="/tmp/aircast_payload.json"
 CONFIG_FILE="/etc/config/aircast"
 TEMP_FILE="/tmp/aircast.conf.tmp"
 
-log "Received JSON payload: $JSON_PAYLOAD"
+if [ ! -f "$JSON_PAYLOAD_FILE" ]; then
+    log "FATAL: Payload file not found at $JSON_PAYLOAD_FILE"
+    exit 1
+fi
+
+log "Reading JSON payload from $JSON_PAYLOAD_FILE"
+JSON_PAYLOAD=$(cat "$JSON_PAYLOAD_FILE")
+log "Payload content: $JSON_PAYLOAD"
 
 echo "config aircast 'global'" > "$TEMP_FILE"
 echo "	option enabled '1'" >> "$TEMP_FILE"
@@ -167,7 +174,7 @@ stop_service() {
 EoL
 chmod +x /etc/init.d/aircast
 
-# 7. کنترلر LuCI با خواندن مستقیم
+# 7. کنترلر LuCI که داده را در فایل می‌نویسد
 cat > /usr/lib/lua/luci/controller/aircast.lua <<'EoL'
 module("luci.controller.aircast", package.seeall)
 
@@ -234,16 +241,24 @@ function api_handler()
         luci.http.write_json({ dhcp = dhcp_devices, enabled = enabled_devices })
 
     elseif action == "save_config" then
+        -- *** THE FINAL FIX: Write payload to a file first ***
         local data = luci.http.content()
-        local sanitized_data = "'" .. tostring(data):gsub("'", "'\\''") .. "'"
-        local command = "/usr/bin/aircast_save_helper.sh " .. sanitized_data
-        local exec_status = os.execute(command)
-        
-        if exec_status == 0 then
-            os.execute("/etc/init.d/aircast restart >/dev/null 2>&1 &")
-            luci.http.write_json({ success = true })
+        if data then
+            local payload_file = io.open("/tmp/aircast_payload.json", "w")
+            payload_file:write(data)
+            payload_file:close()
+            
+            local command = "/usr/bin/aircast_save_helper.sh"
+            local exec_status = os.execute(command)
+            
+            if exec_status == 0 then
+                os.execute("/etc/init.d/aircast restart >/dev/null 2>&1 &")
+                luci.http.write_json({ success = true })
+            else
+                luci.http.write_json({ success = false, message = "Helper script failed with code " .. tostring(exec_status) })
+            end
         else
-            luci.http.write_json({ success = false, message = "Helper script failed with code " .. tostring(exec_status) })
+            luci.http.write_json({ success = false, message = "No data received from browser." })
         end
     end
 end
@@ -486,4 +501,4 @@ EoL
 /etc/init.d/aircast enable
 /etc/init.d/aircast restart
 
-echo ">>> Air-Cast installation v28.0 (The User's Fix) is complete. This is the definitive version. Please test. 🏆"
+echo ">>> Air-Cast installation v29.0 (The Blackbox Fix) is complete. This is the definitive version. Please test. 🏆"
