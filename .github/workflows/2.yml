@@ -5,7 +5,6 @@ on:
     branches:
       - main
     paths:
-      # فقط زمانی اجرا شو که فایل‌های منبع تغییر کنند، نه فایل‌های checksum
       - 'files/**'
       - '!.github/**'
       - '!files/**/*.sha256'
@@ -14,7 +13,6 @@ on:
 
 jobs:
   generate-checksums:
-    # به این جاب اجازه نوشتن در ریپازیتوری را می‌دهد
     permissions:
       contents: write
     
@@ -35,7 +33,6 @@ import sys
 
 def manage_checksums(root_dir):
     source_files = set()
-    # ابتدا تمام فایل‌های منبع (غیر از checksum) را پیدا می‌کنیم
     for dirpath, _, filenames in os.walk(root_dir):
         if ".git" in dirpath:
             continue
@@ -44,7 +41,6 @@ def manage_checksums(root_dir):
                 source_files.add(os.path.join(dirpath, filename))
 
     existing_checksum_files = set()
-    # سپس تمام فایل‌های checksum موجود را لیست می‌کنیم
     for dirpath, _, filenames in os.walk(root_dir):
         if ".git" in dirpath:
             continue
@@ -52,23 +48,19 @@ def manage_checksums(root_dir):
             if filename.endswith('.sha256'):
                 existing_checksum_files.add(os.path.join(dirpath, filename))
 
-    # برای تمام فایل‌های منبع، checksum تولید یا به‌روزرسانی می‌کنیم
     for file_path in source_files:
         sha256_hash = hashlib.sha256()
         with open(file_path, "rb") as f:
-            # خواندن فایل به صورت تکه‌تکه برای مدیریت فایل‌های حجیم
             for byte_block in iter(lambda: f.read(4096), b""):
                 sha256_hash.update(byte_block)
         
         checksum_file_path = f"{file_path}.sha256"
         base_filename = os.path.basename(file_path)
 
-        # نوشتن هش در فایل مجزا با فرمت استاندارد
         with open(checksum_file_path, "w", encoding="utf-8") as f:
             f.write(f"{sha256_hash.hexdigest()} *{base_filename}\n")
         print(f"Generated/Updated checksum for {file_path}")
 
-    # فایل‌های checksum قدیمی (که فایل منبع آن‌ها حذف شده) را پیدا و حذف می‌کنیم
     required_checksum_files = {f"{f}.sha256" for f in source_files}
     stale_files = existing_checksum_files - required_checksum_files
     
@@ -96,7 +88,6 @@ EOF
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "ci: Update individual file checksums"
-          # الگوی فایل برای کامیت کردن تمام فایل‌های .sha256 در پوشه files
           file_pattern: "files/**/*.sha256"
           commit_user_name: "GitHub Actions Bot"
           commit_user_email: "github-actions[bot]@users.noreply.github.com"
