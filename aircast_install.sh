@@ -1,0 +1,504 @@
+#!/bin/sh
+echo ">>> Starting The Definitive Air-Cast Installation (v49.9)..."
+
+# 1. Install Dependencies
+echo "Updating package lists..."
+opkg update
+echo "Installing dependencies (curl, jsonfilter)..."
+opkg install curl jsonfilter
+
+# 2. Clean up old files
+rm -f /usr/bin/aircast_save_helper.sh /tmp/aircast*
+
+# 3. Installation paths and architecture detection
+INSTALL_DIR="/etc/aircast"
+BIN_PATH="$INSTALL_DIR/aircast"
+SYMLINK_PATH="/usr/bin/aircast"
+CONFIG_FILE="/etc/config/aircast"
+mkdir -p "$INSTALL_DIR"
+
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64)  AIRCAST_ARCH="x86_64" ;;
+    aarch64) AIRCAST_ARCH="aarch64" ;;
+    armv7l)  AIRCAST_ARCH="arm" ;;
+    armv6l)  AIRCAST_ARCH="armv6" ;;
+    mips)    AIRCAST_ARCH="mips" ;;
+    mipsel)  AIRCAST_ARCH="mipsel" ;;
+    *)
+        echo "Error: Unsupported architecture: $ARCH"
+        exit 1
+        ;;
+esac
+
+# 4. Download and verify binary
+BINARY_FILENAME="aircast-linux-$AIRCAST_ARCH-static"
+CHECKSUM_FILENAME="$BINARY_FILENAME.sha256"
+DOWNLOAD_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files/$BINARY_FILENAME"
+CHECKSUM_URL="https://raw.githubusercontent.com/peditx/aircast-openwrt/main/files/$CHECKSUM_FILENAME"
+
+echo "Downloading files for $ARCH..."
+curl -L -s -o "$BIN_PATH" "$DOWNLOAD_URL"
+CHECKSUM_FILE_PATH="/tmp/checksum.txt"
+curl -L -s -o "$CHECKSUM_FILE_PATH" "$CHECKSUM_URL"
+
+echo "Verifying checksum..."
+if [ ! -s "$CHECKSUM_FILE_PATH" ]; then
+    echo "Error: Checksum file could not be downloaded."
+    exit 1
+fi
+EXPECTED_CHECKSUM=$(awk '{print $1}' "$CHECKSUM_FILE_PATH")
+echo "$EXPECTED_CHECKSUM  $BIN_PATH" | sha256sum -c -
+if [ $? -ne 0 ]; then
+    echo "Error: Checksum verification failed!"
+    exit 1
+fi
+echo "Checksum verified. ✨"
+rm -f "$CHECKSUM_FILE_PATH"
+chmod +x "$BIN_PATH"
+ln -sf "$BIN_PATH" "$SYMLINK_PATH"
+
+# 5. Create initial configuration and firewall rules
+cat > "$CONFIG_FILE" <<'EoL'
+config aircast 'global'
+	option enabled '1'
+EoL
+echo "Configuring firewall..."
+uci -q delete firewall.aircast_mdns
+uci set firewall.aircast_mdns="rule"
+uci set firewall.aircast_mdns.name="Allow-AirCast-mDNS"
+uci set firewall.aircast_mdns.src="lan"
+uci set firewall.aircast_mdns.proto="udp"
+uci set firewall.aircast_mdns.dest_port="5353"
+uci set firewall.aircast_mdns.dest_ip="224.0.0.251"
+uci set firewall.aircast_mdns.target="ACCEPT"
+uci commit firewall
+/etc/init.d/firewall reload
+
+# 6. Create standard service script
+cat > /etc/init.d/aircast <<'EoL'
+#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+USE_PROCD=1
+BIN_PATH="/usr/bin/aircast"
+XML_CONFIG_PATH="/tmp/aircast_players.xml"
+
+generate_config() {
+    # Start with a clean file
+    echo "<aircast>" > "$XML_CONFIG_PATH"
+
+    # A more robust way to find all sections of type 'device'
+    uci -q show aircast | grep 'aircast\..*=device' | cut -d'=' -f1 | while read -r section_full_name; do
+        enabled=$(uci -q get ${section_full_name}.enabled)
+        ip=$(uci -q get ${section_full_name}.ip)
+        name=$(uci -q get ${section_full_name}.name)
+
+        if [ "$enabled" = "1" ] && [ -n "$ip" ]; then
+            echo "  <player><ip>$ip</ip><name>$name</name><enabled>true</enabled></player>" >> "$XML_CONFIG_PATH"
+        fi
+    done
+
+    # Close the XML file
+    echo "</aircast>" >> "$XML_CONFIG_PATH"
+}
+
+start_service() {
+    generate_config
+
+    BRIP=$(ip addr show br-lan 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+    [ -z "$BRIP" ] && BRIP=$(ip addr show lan 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+    [ -z "$BRIP" ] && BRIP=$(ip addr show eth0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+    [ -z "$BRIP" ] && BRIP="10.1.1.1"
+    
+    procd_open_instance
+    procd_set_param command "$BIN_PATH" -b "$BRIP" -f "$XML_CONFIG_PATH"
+    procd_set_param respawn
+    procd_set_param file "/etc/config/aircast"
+    procd_close_instance
+}
+
+stop_service() {
+    killall -q -s TERM "$BIN_PATH" || pkill -f "$BIN_PATH"
+    rm -f "$XML_CONFIG_PATH"
+}
+EoL
+chmod +x /etc/init.d/aircast
+
+# 7. LuCI Controller with direct read/write architecture
+cat > /usr/lib/lua/luci/controller/aircast.lua <<'EoL'
+module("luci.controller.aircast", package.seeall)
+
+function index()
+    -- Create the parent menu entry
+    entry({"admin", "peditxos_tools"}, firstchild(), "PeDitXOS Tools", 80).dependent = false
+    -- Place the aircast entry inside it
+    entry({"admin", "peditxos_tools", "aircast"}, template("aircast_status"), "Air-Cast", 10).dependent = true
+    
+    -- The API entry remains hidden
+    local api_entry = entry({"admin", "services", "aircast_api"}, call("api_handler"), nil)
+    api_entry.leaf = true
+    api_entry.sysauth = false
+end
+
+function api_handler()
+    local action = luci.http.formvalue("action")
+    luci.http.prepare_content("application/json")
+
+    if action == "status" then
+        local status_output = luci.sys.exec("/etc/init.d/aircast status 2>/dev/null")
+        local running = (string.match(status_output, "running") ~= nil)
+        local ip = luci.sys.exec("ip addr show br-lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1"):gsub("\n","")
+        if ip == "" then ip = luci.sys.exec("ip addr show lan 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1"):gsub("\n","") end
+        if ip == "" then ip = "N/A" end
+        luci.http.write_json({ running = running, ip = ip })
+
+    elseif action == "start" or action == "stop" or action == "restart" then
+        luci.sys.exec("/etc/init.d/aircast " .. action .. " >/dev/null 2>&1")
+        luci.http.write_json({ success = true })
+
+    elseif action == "get_devices" then
+        local leases_raw = luci.sys.exec("cat /tmp/dhcp.leases 2>/dev/null")
+        local dhcp_devices = {}
+        if leases_raw and leases_raw ~= "" then
+            for line in leases_raw:gmatch("[^\r\n]+") do
+                local _, _, ip, name = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+([%w%-_*]+)")
+                if ip then
+                    if not name or name == "*" then name = "(unknown)" end
+                    table.insert(dhcp_devices, {ip = ip, name = name})
+                end
+            end
+        end
+
+        local enabled_devices = {}
+        local current_device = nil
+        local f = io.open("/etc/config/aircast", "r")
+        if f then
+            for line in f:lines() do
+                if line:match("^config device") then
+                    current_device = {}
+                elseif current_device and line:match("^%s*option name") then
+                    current_device.name = line:match("option name%s+'([^']+)'") or ""
+                elseif current_device and line:match("^%s*option ip") then
+                    current_device.ip = line:match("option ip%s+'([^']+)'") or ""
+                elseif current_device and (line:match("^%s*$") or line:match("^config")) then
+                    if current_device and current_device.ip and current_device.name then
+                        table.insert(enabled_devices, current_device)
+                    end
+                    current_device = (line:match("^config device")) and {} or nil
+                end
+            end
+            f:close()
+            if current_device and current_device.ip and current_device.name then
+                table.insert(enabled_devices, current_device)
+            end
+        end
+        
+        luci.http.write_json({ dhcp = dhcp_devices, enabled = enabled_devices })
+
+    elseif action == "add_device" then
+        local ip = luci.http.formvalue("ip")
+        local name = luci.http.formvalue("name")
+        if ip and name then
+            local safe_ip = "'" .. ip:gsub("'", "'\\''") .. "'"
+            local safe_name = "'" .. name:gsub("'", "'\\''") .. "'"
+            os.execute("uci add aircast device >/dev/null 2>&1")
+            os.execute("uci set aircast.@device[-1].ip=" .. safe_ip)
+            os.execute("uci set aircast.@device[-1].name=" .. safe_name)
+            os.execute("uci set aircast.@device[-1].enabled='1'")
+            local commit_status = os.execute("uci commit aircast")
+            if commit_status == 0 then
+                os.execute("/etc/init.d/aircast restart >/dev/null 2>&1 &")
+                luci.http.write_json({ success = true })
+            else
+                luci.http.write_json({ success = false, message = "UCI commit failed" })
+            end
+        else
+            luci.http.write_json({ success = false, message = "Missing IP or Name" })
+        end
+
+    elseif action == "remove_device" then
+        local ip = luci.http.formvalue("ip")
+        if ip then
+            local temp_file = io.open("/tmp/aircast.conf.tmp", "w")
+            if temp_file then
+                temp_file:write("config aircast 'global'\n")
+                temp_file:write("\toption enabled '1'\n\n")
+
+                local f = io.open("/etc/config/aircast", "r")
+                if f then
+                    local current_device_ip = nil
+                    local block_buffer = {}
+                    for line in f:lines() do
+                        if line:match("^config device") then
+                            if #block_buffer > 0 then
+                                if current_device_ip ~= ip then
+                                    temp_file:write(table.concat(block_buffer, "\n") .. "\n\n")
+                                end
+                            end
+                            block_buffer = { line }
+                            current_device_ip = nil
+                        elseif line:match("^%s*option ip") then
+                            current_device_ip = line:match("option ip%s+'([^']+)'")
+                            table.insert(block_buffer, line)
+                        elseif line:match("^%s*option") then
+                             table.insert(block_buffer, line)
+                        end
+                    end
+                    f:close()
+                    if #block_buffer > 0 and current_device_ip ~= ip then
+                        temp_file:write(table.concat(block_buffer, "\n") .. "\n\n")
+                    end
+                end
+                temp_file:close()
+                os.execute("mv /tmp/aircast.conf.tmp /etc/config/aircast")
+                os.execute("/etc/init.d/aircast restart >/dev/null 2>&1 &")
+            end
+            luci.http.write_json({ success = true })
+        else
+            luci.http.write_json({ success = false, message = "Missing IP" })
+        end
+    end
+end
+EoL
+
+# 8. View file with direct command architecture
+cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
+<%+header%>
+<style>
+    .glass-panel {background: rgba(30, 30, 40, 0.75); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; color: #f0f0f0; padding: 25px 30px; margin: 20px auto; max-width: 900px; box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);}
+    .panel-title {font-size: 1.8em; font-weight: bold; text-align: center; margin-bottom: 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 15px;}
+    .info-row {display: flex; justify-content: space-between; align-items: center; padding: 12px 0; font-size: 1.1em;}
+    .info-label { font-weight: bold; }
+    .status-running { color: #28a745; font-weight: bold;}
+    .status-stopped { color: #dc3545; font-weight: bold;}
+    .device-table {width: 100%; margin-top: 20px; border-collapse: collapse;}
+    .device-table th, .device-table td {padding: 12px; text-align: left; border-bottom: 1px solid rgba(255, 255, 255, 0.1);}
+    .device-table th {background-color: rgba(255, 255, 255, 0.05);}
+    .btn-container { text-align: center; margin-top: 25px; display: flex; justify-content: center; gap: 10px;}
+    .glass-btn {background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2); color: #fff; padding: 10px 20px; border-radius: 8px; cursor: pointer; transition: background 0.3s, transform 0.1s; font-weight: bold;}
+    .glass-btn:hover { background: rgba(255, 255, 255, 0.2); }
+    .glass-btn:active { transform: scale(0.98); }
+    .glass-btn:disabled {background: rgba(128, 128, 128, 0.2); color: #888; cursor: not-allowed; border-color: rgba(128, 128, 128, 0.3);}
+    .manual-add-form { display: flex; gap: 10px; align-items: center; margin-top: 20px; justify-content: center; }
+    .manual-add-form input { background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 8px; border-radius: 6px; }
+    #debug-panel { margin-top: 20px; background: rgba(0,0,0,0.3); border-radius: 8px; padding: 15px; font-family: monospace; font-size: 12px; max-height: 200px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.1); }
+</style>
+
+<div class="glass-panel">
+    <div class="panel-title">Air-Cast Control</div>
+    <div class="info-row">
+        <span class="info-label">Service Status:</span><span id="statusText">Loading...</span>
+    </div>
+    <div class="info-row">
+        <span class="info-label">Router LAN IP:</span><span id="ipText">Loading...</span>
+    </div>
+    <div class="btn-container">
+        <button class="glass-btn" id="startBtn" onclick="controlService('start')">Start</button>
+        <button class="glass-btn" id="stopBtn" onclick="controlService('stop')">Stop</button>
+        <button class="glass-btn" id="restartBtn" onclick="controlService('restart')">Restart</button>
+    </div>
+</div>
+
+<div class="glass-panel">
+    <div class="panel-title">Network Devices (DHCP Clients)</div>
+    <p style="text-align: center; margin-bottom: 20px;">Add devices from your network, or enter an IP manually below.</p>
+    <div class="btn-container">
+        <button class="glass-btn" id="loadDevicesBtn" onclick="loadAllDevices()">Reload Device Lists</button>
+    </div>
+    <table class="device-table">
+        <thead><tr><th>Hostname</th><th>IP Address</th><th>Action</th></tr></thead>
+        <tbody id="dhcpDeviceList"><tr><td colspan="3" style="text-align:center;">Click "Reload" to see network clients.</td></tr></tbody>
+    </table>
+    <div class="manual-add-form">
+        <input type="text" id="manualIp" placeholder="Enter IP Address">
+        <input type="text" id="manualName" placeholder="Enter Hostname (Optional)">
+        <button class="glass-btn" onclick="addManualDevice()">Add Manually</button>
+    </div>
+</div>
+
+<div class="glass-panel">
+    <div class="panel-title">Enabled AirCast Devices</div>
+    <table class="device-table">
+        <thead><tr><th>Hostname</th><th>IP Address</th><th>Action</th></tr></thead>
+        <tbody id="enabledDeviceList"><tr><td colspan="3" style="text-align:center;">No devices enabled.</td></tr></tbody>
+    </table>
+</div>
+
+<div class="glass-panel">
+    <div class="panel-title">Client-Side Debug Log</div>
+    <div id="debug-panel"><div style="color: #888;">Log will appear here...</div></div>
+</div>
+
+<script type="text/javascript">
+    const statusText = document.getElementById('statusText'), ipText = document.getElementById('ipText');
+    const startBtn = document.getElementById('startBtn'), stopBtn = document.getElementById('stopBtn'), restartBtn = document.getElementById('restartBtn');
+    const loadDevicesBtn = document.getElementById('loadDevicesBtn');
+    const dhcpDeviceList = document.getElementById('dhcpDeviceList'), enabledDeviceList = document.getElementById('enabledDeviceList');
+    const manualIpInput = document.getElementById('manualIp'), manualNameInput = document.getElementById('manualName');
+    const debugPanel = document.getElementById('debug-panel');
+    let logHistory = [];
+
+    function escapeHTML(str) {
+        return str.toString().replace(/[&<>"']/g, tag => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[tag]));
+    }
+
+    function logMessage(message, type = 'info') {
+        const timestamp = new Date().toLocaleTimeString();
+        const fullMessage = `[${timestamp}] ${message}`;
+        logHistory.unshift(fullMessage);
+        if (logHistory.length > 20) logHistory.pop();
+        let color = '#fff';
+        if (type === 'error') color = '#ff8a8a';
+        if (type === 'success') color = '#8aff94';
+        if (type === 'data') color = '#8ae8ff';
+        debugPanel.innerHTML = logHistory.map(entry => `<div style="color:${color}; border-bottom: 1px solid #444; padding: 2px 0;">${escapeHTML(entry)}</div>`).join('');
+    }
+
+    function renderTables(dhcpClients, enabledDevices) {
+        logMessage('Rendering tables...');
+        dhcpDeviceList.innerHTML = '';
+        enabledDeviceList.innerHTML = '';
+        const enabledIps = new Set(enabledDevices.map(d => d.ip));
+
+        if (dhcpClients.length === 0) {
+            dhcpDeviceList.innerHTML = '<tr><td colspan="3" style="text-align:center;">No active DHCP clients found.</td></tr>';
+        } else {
+            let foundVisibleDevice = false;
+            dhcpClients.forEach(device => {
+                if (!enabledIps.has(device.ip)) {
+                    foundVisibleDevice = true;
+                    const row = dhcpDeviceList.insertRow();
+                    row.innerHTML = `<td>${escapeHTML(device.name)}</td><td>${escapeHTML(device.ip)}</td><td><button class="glass-btn" onclick="addDevice(this, '${escapeHTML(device.ip)}', '${escapeHTML(device.name)}')">Add</button></td>`;
+                }
+            });
+            if (!foundVisibleDevice) {
+                 dhcpDeviceList.innerHTML = '<tr><td colspan="3" style="text-align:center;">All network devices have been added.</td></tr>';
+            }
+        }
+
+        if (enabledDevices.length === 0) {
+            enabledDeviceList.innerHTML = '<tr><td colspan="3" style="text-align:center;">No devices enabled for AirCast.</td></tr>';
+        } else {
+            enabledDevices.forEach(device => {
+                const row = enabledDeviceList.insertRow();
+                row.innerHTML = `<td>${escapeHTML(device.name)}</td><td>${escapeHTML(device.ip)}</td><td><button class="glass-btn" onclick="removeDevice(this, '${escapeHTML(device.ip)}')">Remove</button></td>`;
+            });
+        }
+        logMessage('Tables rendered successfully.', 'success');
+    }
+    
+    function addDevice(btn, ip, name) {
+        btn.disabled = true;
+        btn.textContent = 'Adding...';
+        logMessage(`Adding device: ${name} (${ip})`);
+        const url = `<%=luci.dispatcher.build_url("admin/services/aircast_api")%>?action=add_device&ip=${encodeURIComponent(ip)}&name=${encodeURIComponent(name)}`;
+        XHR.get(url, null, function(x, data) {
+            if (data && data.success) {
+                logMessage('Device added successfully.', 'success');
+                loadAllDevices();
+            } else {
+                logMessage(`Failed to add device. Server response: ${JSON.stringify(data)}`, 'error');
+                alert('Failed to add device.');
+                btn.disabled = false;
+                btn.textContent = 'Add';
+            }
+        });
+    }
+
+    function removeDevice(btn, ip) {
+        btn.disabled = true;
+        btn.textContent = 'Removing...';
+        logMessage(`Removing device: ${ip}`);
+        const url = `<%=luci.dispatcher.build_url("admin/services/aircast_api")%>?action=remove_device&ip=${encodeURIComponent(ip)}`;
+        XHR.get(url, null, function(x, data) {
+            if (data && data.success) {
+                logMessage('Device removed successfully.', 'success');
+                loadAllDevices();
+            } else {
+                logMessage('Failed to remove device.', 'error');
+                alert('Failed to remove device.');
+                btn.disabled = false;
+                btn.textContent = 'Remove';
+            }
+        });
+    }
+
+    function addManualDevice() {
+        const ip = manualIpInput.value.trim();
+        let name = manualNameInput.value.trim() || ip;
+        if (!/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(ip)) {
+            alert("Please enter a valid IP address.");
+            return;
+        }
+        const btn = manualIpInput.nextElementSibling.nextElementSibling;
+        addDevice(btn, ip, name);
+        manualIpInput.value = '';
+        manualNameInput.value = '';
+    }
+
+    function updateStatus() {
+        XHR.get('<%=luci.dispatcher.build_url("admin/services/aircast_api")%>?action=status', null, function(x, data) {
+            if (!data) return;
+            const isRunning = data.running;
+            statusText.textContent = isRunning ? 'Running' : 'Stopped';
+            statusText.className = 'status-' + (isRunning ? 'running' : 'stopped');
+            ipText.textContent = data.ip || 'N/A';
+            startBtn.disabled = isRunning;
+            stopBtn.disabled = !isRunning;
+            restartBtn.disabled = !isRunning;
+        });
+    }
+
+    function controlService(action) {
+        logMessage(`Control service action: ${action}`);
+        document.getElementById(action + 'Btn').disabled = true;
+        XHR.get('<%=luci.dispatcher.build_url("admin/services/aircast_api")%>?action=' + action, null, function(x, data) {
+            setTimeout(updateStatus, 1500); 
+        });
+    }
+
+    function loadAllDevices() {
+        logMessage('Requesting all device lists from server...');
+        loadDevicesBtn.disabled = true;
+        loadDevicesBtn.textContent = 'Loading...';
+        XHR.get('<%=luci.dispatcher.build_url("admin/services/aircast_api")%>?action=get_devices', null, function(x, data) {
+            loadDevicesBtn.disabled = false;
+            loadDevicesBtn.textContent = 'Reload Device Lists';
+            if (data) {
+                logMessage(`Received data. DHCP: ${data.dhcp ? data.dhcp.length : 0}, Enabled: ${data.enabled ? data.enabled.length : 0}`, 'success');
+                const dhcpClients = Array.isArray(data.dhcp) ? data.dhcp : [];
+                const enabledDevices = Array.isArray(data.enabled) ? data.enabled : [];
+                renderTables(dhcpClients, enabledDevices);
+            } else {
+                logMessage('Failed to load device lists.', 'error');
+            }
+        });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        logMessage('Page loaded. Initializing script.');
+        updateStatus();
+        loadAllDevices();
+        setInterval(updateStatus, 10000);
+    });
+</script>
+<%+footer%>
+EoL
+
+# 9. Enable and run the service
+/etc/init.d/aircast enable
+/etc/init.d/aircast restart
+
+echo ">>> Air-Cast installation v49.9 (Definitive Fix) is complete. This is the most stable version. Please test. 🏆"
+cat << "EoL"
+
+ ______      _____   _      _    _     _____       
+(_____ \    (____ \ (_)_   \ \  / /   / ___ \      
+ _____) )___ _   \ \ _| |_  \ \/ /   | |   | | ___ 
+|  ____/ _  ) |   | | |  _)  )  (    | |   | |/___)
+| |   ( (/ /| |__/ /| | |__ / /\ \   | |___| |___ |
+|_|    \____)_____/ |_|\___)_/  \_\   \_____/(___/ 
+                                                   
+                                             AirCast by PeDitX
+EoL
