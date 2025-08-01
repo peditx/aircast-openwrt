@@ -1,5 +1,5 @@
 #!/bin/sh
-echo ">>> Starting The Helper-Script Air-Cast Installation (v22.0)..."
+echo ">>> Starting The Final & Complete Air-Cast Installation (v25.0)..."
 
 # 1. پاکسازی فایل‌های قدیمی
 rm -f /tmp/aircast_lua.log
@@ -53,48 +53,37 @@ rm -f "$CHECKSUM_FILE_PATH"
 chmod +x "$BIN_PATH"
 ln -sf "$BIN_PATH" "$SYMLINK_PATH"
 
-# 4. ایجاد اسکریپت کمکی برای ذخیره‌سازی
+# 4. ایجاد اسکریپت کمکی نهایی (با روش نوشتن مستقیم)
 cat > "$HELPER_SCRIPT_PATH" <<'EoL'
 #!/bin/sh
-
-# This script receives a JSON payload and saves it to the aircast UCI config.
-# It uses 'jsonfilter', a standard OpenWrt utility, for robust parsing.
-
 JSON_PAYLOAD="$1"
-
-# 1. Clear all old device sections in a single batch command.
-uci -q batch <<EOF
-delete aircast.device
-EOF
-
-# 2. Parse the incoming JSON and loop through each device object.
-# The 'jsonfilter' utility reads the JSON from stdin.
+CONFIG_FILE="/etc/config/aircast"
+TEMP_FILE="/tmp/aircast.conf.tmp"
+# Start fresh by writing the global section to a temporary file.
+echo "config aircast 'global'" > "$TEMP_FILE"
+echo "	option enabled '1'" >> "$TEMP_FILE"
+echo "" >> "$TEMP_FILE"
+# Parse the incoming JSON and append new device blocks to the temp file.
 echo "$JSON_PAYLOAD" | jsonfilter -e '@.devices[*]' | while read -r device_json; do
-    # For each device, extract ip and name.
     IP=$(echo "$device_json" | jsonfilter -e '@.ip')
     NAME=$(echo "$device_json" | jsonfilter -e '@.name')
-
-    # Add the new device to UCI using one-by-one commands for stability.
-    uci -q add aircast device
-    uci -q set aircast.@device[-1].name="$NAME"
-    uci -q set aircast.@device[-1].ip="$IP"
-    uci -q set aircast.@device[-1].enabled='1'
+    echo "config device" >> "$TEMP_FILE"
+    echo "	option name '$NAME'" >> "$TEMP_FILE"
+    echo "	option ip '$IP'" >> "$TEMP_FILE"
+    echo "	option enabled '1'" >> "$TEMP_FILE"
+    echo "" >> "$TEMP_FILE"
 done
-
-# 3. After adding all new devices, commit the changes.
-uci -q commit aircast
-
-# 4. Exit with the status of the commit command. 0 for success.
-exit $?
+# Atomically replace the original config file with the new content.
+mv "$TEMP_FILE" "$CONFIG_FILE"
+exit 0
 EoL
 chmod +x "$HELPER_SCRIPT_PATH"
 
-# 5. ایجاد فایل تنظیمات UCI و قوانین فایروال
+# 5. ایجاد فایل تنظیمات اولیه و قوانین فایروال
 cat > "$CONFIG_FILE" <<'EoL'
 config aircast 'global'
-    option enabled '1'
+	option enabled '1'
 EoL
-
 echo "Configuring firewall..."
 uci -q delete firewall.aircast_mdns
 uci set firewall.aircast_mdns="rule"
@@ -113,10 +102,8 @@ cat > /etc/init.d/aircast <<'EoL'
 START=99
 STOP=10
 USE_PROCD=1
-
 BIN_PATH="/usr/bin/aircast"
 XML_CONFIG_PATH="/tmp/aircast_players.xml"
-
 generate_config() {
     echo "<aircast>" > "$XML_CONFIG_PATH"
     uci -q show aircast | grep '=.device' | cut -d. -f2 | while read -r section; do
@@ -128,21 +115,18 @@ generate_config() {
     done
     echo "</aircast>" >> "$XML_CONFIG_PATH"
 }
-
 start_service() {
     generate_config
     BRIP=$(ip addr show br-lan 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     [ -z "$BRIP" ] && BRIP=$(ip addr show lan 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     [ -z "$BRIP" ] && BRIP=$(ip addr show eth0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
     [ -z "$BRIP" ] && BRIP="10.1.1.1"
-    
     procd_open_instance
     procd_set_param command "$BIN_PATH" -b "$BRIP" -i "$XML_CONFIG_PATH"
     procd_set_param respawn
     procd_set_param file "/etc/config/aircast"
     procd_close_instance
 }
-
 stop_service() {
     killall -q -s TERM "$BIN_PATH" || pkill -f "$BIN_PATH"
     rm -f "$XML_CONFIG_PATH"
@@ -150,7 +134,7 @@ stop_service() {
 EoL
 chmod +x /etc/init.d/aircast
 
-# 7. کنترلر LuCI که از اسکریپت کمکی استفاده می‌کند
+# 7. کنترلر LuCI با تمام قابلیت‌ها
 cat > /usr/lib/lua/luci/controller/aircast.lua <<'EoL'
 module("luci.controller.aircast", package.seeall)
 
@@ -180,6 +164,19 @@ function api_handler()
         luci.http.write_json({ success = true })
 
     elseif action == "get_devices" then
+        -- Restored DHCP lease reading logic
+        local leases_raw = luci.sys.exec("cat /tmp/dhcp.leases 2>/dev/null")
+        local dhcp_devices = {}
+        if leases_raw and leases_raw ~= "" then
+            for line in leases_raw:gmatch("[^\r\n]+") do
+                local _, _, ip, name = line:match("^(%S+)%s+(%S+)%s+(%S+)%s+([%w%-_*]+)")
+                if ip then
+                    if not name or name == "*" then name = "(unknown)" end
+                    table.insert(dhcp_devices, {ip = ip, name = name})
+                end
+            end
+        end
+
         local uci = luci.model.uci.cursor()
         local enabled_devices = {}
         uci:foreach("aircast", "device", function(s)
@@ -187,23 +184,18 @@ function api_handler()
                 table.insert(enabled_devices, { ip = s.ip, name = s.name or s.ip }) 
             end
         end)
-        luci.http.write_json({ dhcp = {}, enabled = enabled_devices }) -- Keep structure consistent
+        luci.http.write_json({ dhcp = dhcp_devices, enabled = enabled_devices })
 
     elseif action == "save_config" then
         local data = luci.http.content()
-        -- Sanitize the data to be passed as a single, safe shell argument
         local sanitized_data = "'" .. tostring(data):gsub("'", "'\\''") .. "'"
-        
-        -- Call the external helper script to do the heavy lifting
         local command = "/usr/bin/aircast_save_helper.sh " .. sanitized_data
         local exec_status = os.execute(command)
         
         if exec_status == 0 then
-            -- Success
             os.execute("/etc/init.d/aircast restart >/dev/null 2>&1 &")
             luci.http.write_json({ success = true })
         else
-            -- Failure
             luci.http.write_json({ success = false, message = "Helper script failed with code " .. tostring(exec_status) })
         end
     end
@@ -321,12 +313,17 @@ cat > /usr/lib/lua/luci/view/aircast_status.htm <<'EoL'
         if (dhcpClients.length === 0) {
             dhcpDeviceList.innerHTML = '<tr><td colspan="3" style="text-align:center;">No active DHCP clients found.</td></tr>';
         } else {
+            let foundVisibleDevice = false;
             dhcpClients.forEach(device => {
                 if (!enabledIps.has(device.ip)) {
+                    foundVisibleDevice = true;
                     const row = dhcpDeviceList.insertRow();
                     row.innerHTML = `<td>${escapeHTML(device.name)}</td><td>${escapeHTML(device.ip)}</td><td><button class="glass-btn" onclick="addDevice('${escapeHTML(device.ip)}', '${escapeHTML(device.name)}')">Add</button></td>`;
                 }
             });
+            if (!foundVisibleDevice) {
+                 dhcpDeviceList.innerHTML = '<tr><td colspan="3" style="text-align:center;">All network devices have been added.</td></tr>';
+            }
         }
 
         if (enabledDevices.length === 0) {
@@ -442,4 +439,4 @@ EoL
 /etc/init.d/aircast enable
 /etc/init.d/aircast restart
 
-echo ">>> Air-Cast installation with Helper-Script architecture is complete. This is the most robust version. Please test. 🙏"
+echo ">>> Air-Cast installation v25.0 (Final & Complete) is complete. This is it. Please test. 🚀"
