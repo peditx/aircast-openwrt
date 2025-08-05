@@ -131,7 +131,7 @@ module("luci.controller.aircast", package.seeall)
 
 function index()
     -- Create the parent menu entry "PeDitXOS Tools"
-    entry({"admin", "peditxos"}, firstchild(), "PeDitXOS Tools", 80).dependent = false
+    entry({"admin", "peditxos"}, firstchild(), "PeDitXOS Tools", 50).dependent = false
     
     -- Place the "Air-Cast" entry as a child of the parent menu
     entry({"admin", "peditxos", "aircast"}, template("aircast_status"), "Air-Cast", 10).dependent = true
